@@ -85,7 +85,7 @@ class Window(QMainWindow):
         split=QSplitter(); layout.addWidget(split,1)
         left=QWidget(); panel=QVBoxLayout(left); split.addWidget(left)
         self.groups=QComboBox(); self.groups.currentIndexChanged.connect(self.render); panel.addWidget(self.groups)
-        self.files=QListWidget(); self.files.itemDoubleClicked.connect(lambda _:self.play_selected()); self.files.currentRowChanged.connect(self.selection); panel.addWidget(self.files,1)
+        self.files=QListWidget();self.files.setContextMenuPolicy(Qt.CustomContextMenu);self.files.customContextMenuRequested.connect(self.media_menu); self.files.itemDoubleClicked.connect(lambda _:self.play_selected()); self.files.currentRowChanged.connect(self.selection); panel.addWidget(self.files,1)
         row=QHBoxLayout(); panel.addLayout(row)
         self.button(row,'加入影片／圖片',self.add_files); self.button(row,'移除',self.remove)
         row=QHBoxLayout(); panel.addLayout(row); self.button(row,'↑ 上移',lambda:self.move(-1)); self.button(row,'↓ 下移',lambda:self.move(1))
@@ -105,7 +105,7 @@ class Window(QMainWindow):
         right=QWidget(); controls=QVBoxLayout(right); split.addWidget(right); controls.addWidget(self.screen,1)
         row=QHBoxLayout(); controls.addLayout(row)
         self.button(row,'⏮ 上一個',lambda:self.advance(True)); self.play_btn=self.button(row,'▶ 播放／暫停',self.toggle); self.button(row,'■ 停止',self.stop); self.button(row,'下一個 ⏭',self.advance)
-        self.button(row,'獨立輸出／全螢幕',self.output);self.button(row,'選擇輸出螢幕',self.choose_output)
+        self.button(row,'獨立輸出／全螢幕',self.output);self.button(row,'選擇輸出螢幕',self.choose_output);self.button(row,'預覽視窗',self.show_preview)
         self.seek=QSlider(Qt.Horizontal); self.seek.setRange(0,1000); self.seek.sliderReleased.connect(self.seek_to); controls.addWidget(self.seek)
         row=QHBoxLayout(); controls.addLayout(row); row.addWidget(QLabel('輪播模式'))
         self.mode=QComboBox(); self.mode.addItems(MODES); row.addWidget(self.mode)
@@ -121,6 +121,7 @@ class Window(QMainWindow):
         from compositor import Compositor
         self.compositor=Compositor(self)
         self.output_view=Screen();self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
+        self.preview_view=Screen();self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
         self.timer=QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(16); self.last=time.monotonic()
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self,activated=fn)
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self.output_view,activated=fn)
@@ -165,6 +166,29 @@ class Window(QMainWindow):
         if 0<=row<len(items):
             c=items[row];self.seconds.setValue(c['seconds']);self.clip_start.setValue(c.get('start',0));self.clip_end.setValue(c.get('end',0));self.clip_gain.setValue(c.get('gain',100));self.clip_mute.setChecked(c.get('mute',False))
         self.seconds.blockSignals(False)
+    def show_preview(self):
+        self.preview_view.show();self.preview_view.raise_();self.preview_view.refit()
+    def media_menu(self,pos):
+        row=self.files.indexAt(pos).row()
+        if row<0:return
+        self.files.setCurrentRow(row)
+        item=self.lists[self.group_index()]['items'][row]
+        if Path(item['path']).suffix.lower() in IMAGE_EXT:return
+        from PySide6.QtWidgets import QMenu
+        menu=QMenu(self);action=menu.addAction('編輯影片…')
+        if menu.exec(self.files.viewport().mapToGlobal(pos))==action:self.open_video_editor(row)
+    def open_video_editor(self,row):
+        from video_editor import VideoEditor
+        items=self.lists[self.group_index()]['items']
+        if not 0<=row<len(items):return
+        item=items[row]
+        if not Path(item['path']).is_file():QMessageBox.warning(self,'檔案遺失','請重新加入影片。');return
+        self.stop()
+        dialog=VideoEditor(item['path'],item,self)
+        if dialog.exec() and dialog.result_config:
+            item.update(dialog.result_config);self.render();self.files.setCurrentRow(row);self.persist_session()
+            self.status.setText('影片片段與音量已更新；原始影片保留。')
+        dialog.deleteLater()
     def edit_clip(self):
         row=self.files.currentRow();items=self.lists[self.group_index()]['items']
         if not 0<=row<len(items):return
@@ -359,7 +383,7 @@ class Window(QMainWindow):
     def dragEnterEvent(self,e):
         if e.mimeData().hasUrls():e.acceptProposedAction()
     def dropEvent(self,e):self.add_files([u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()])
-    def closeEvent(self,e):self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();super().closeEvent(e)
+    def closeEvent(self,e):self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();super().closeEvent(e)
 
 if __name__=='__main__':
     app=QApplication(sys.argv);app.setApplicationName('Media Carousel');window=Window();window.show()
