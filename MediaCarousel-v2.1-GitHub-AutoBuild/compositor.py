@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QTimer, QSizeF, QUrl, QRectF
 from PySide6.QtGui import QPen, QColor, QBrush, QPixmap, QImageReader
 from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTextItem,
     QDockWidget,QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QListWidget,QComboBox,
-    QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox)
+    QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox,QFileDialog)
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -191,10 +191,13 @@ class Compositor(QDockWidget):
         self.list=QListWidget();v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'＋清單畫面',self.add_playlist);self.button(row,'＋外部擷取',self.add_capture);self.button(row,'移除',self.remove)
+        row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media)
         self.group=QComboBox();v.addWidget(self.group);self.group.currentIndexChanged.connect(self.change_group)
         self.controls={}
         for key,label,low,high in [('x','左',0,1920),('y','上',0,1080),('w','寬',80,1920),('h','高',45,1080),('gain','畫面音量 %',0,100)]:
             row=QHBoxLayout();v.addLayout(row);row.addWidget(QLabel(label));spin=QDoubleSpinBox();spin.setRange(low,high);spin.setDecimals(0);row.addWidget(spin);self.controls[key]=spin;spin.valueChanged.connect(self.update_layer)
+        row=QHBoxLayout();v.addLayout(row)
+        self.button(row,'縮小 −10%',lambda:self.scale_selected(.9));self.button(row,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(row,'一鍵滿版',self.full_bleed)
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
         self.fit=QCheckBox('填滿此畫面（裁切）');v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'移到上層',lambda:self.reorder(1));self.button(row,'移到下層',lambda:self.reorder(-1))
@@ -245,6 +248,31 @@ class Compositor(QDockWidget):
         l=Layer(self,c);self.host.screen.scene().addItem(l);self.layers.append(l);l.setVisible(self.enabled);l.editable(self.edit.isChecked());self.refresh();self.list.setCurrentRow(len(self.layers)-1)
     def add_playlist(self):
         self.enable.setChecked(True);self.add({'kind':'playlist','group':self.host.group_index(),'name':f'畫面 {len(self.layers)+1}','x':40*len(self.layers),'y':30*len(self.layers),'w':640,'h':360})
+    def add_media(self):
+        if len(self.layers)>=MAX_LAYERS:
+            QMessageBox.information(self.host,'畫面上限','最多可添加 12 個畫面。');return
+        paths,_=QFileDialog.getOpenFileNames(self.host,'新增照片／影片畫面','','所有檔案 (*)')
+        if not paths:return
+        group=len(self.host.lists)
+        self.host.lists.append({'name':Path(paths[0]).stem,'items':[{'path':p,'seconds':5,'start':0,'end':0,'gain':100,'mute':False} for p in paths]})
+        self.host.refresh_groups(group);self.enable.setChecked(True)
+        self.add({'kind':'playlist','group':group,'name':Path(paths[0]).stem,'w':640,'h':360})
+        self.host.persist_session()
+    def scale_selected(self,factor):
+        l=self.selected()
+        if not l:return
+        scale=max(80/l.c['w'],45/l.c['h'],min(factor,1920/l.c['w'],1080/l.c['h']))
+        w,h=l.c['w']*scale,l.c['h']*scale
+        cx,cy=l.pos().x()+l.c['w']/2,l.pos().y()+l.c['h']/2
+        l.resize_to(w,h);l.setPos(max(0,min(1920-w,cx-w/2)),max(0,min(1080-h,cy-h/2)))
+        self.sync_controls();self.host.persist_session()
+    def full_bleed(self):
+        l=self.selected()
+        if not l:return
+        l.c['fit']=True;l.resize_to(1920,1080);l.setPos(0,0)
+        self.layers.remove(l);self.layers.append(l);self.refresh();self.list.setCurrentRow(len(self.layers)-1)
+        self.sync_controls();self.host.persist_session()
+        self.host.status.setText('已滿版：1920×1080，等比例填滿（超出部分裁切）；此畫面已移到最上層。')
     def add_capture(self):
         kind,ok=QInputDialog.getItem(self.host,'外部擷取','來源種類',['攝影機／USB HDMI 擷取卡','螢幕','應用程式視窗'],0,False)
         if not ok:return
@@ -309,3 +337,4 @@ class Compositor(QDockWidget):
         now=time.monotonic();dt=min(.25,now-self.last);self.last=now
         if self.enabled:
             for l in self.layers:l.tick(dt)
+
