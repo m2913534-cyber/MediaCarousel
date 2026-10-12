@@ -7,7 +7,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(following(self.lists,(0,1),'清單循環'),(0,0));self.assertEqual(following(self.lists,(0,1),'所有清單輪播'),(2,0));self.assertEqual(following(self.lists,(2,0),'所有清單輪播'),(0,0));self.assertEqual(following(self.lists,(0,0),'所有清單輪播',True),(2,0));self.assertIsNone(following(self.lists,(0,1),'播放一次'));self.assertEqual(following(self.lists,(0,1),'單檔循環'),(0,1));self.assertIsNone(following([], (0,0), '所有清單輪播'))
     def test_portable_project_and_scenes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path=Path(tmp)/'show.mcarousel';media=Path(tmp)/'媒體.mp4';item={'path':str(media),'seconds':7.5,'start':2,'end':8,'gain':45,'mute':True}
+            path=Path(tmp).resolve()/'show.mcarousel';media=Path(tmp).resolve()/'媒體.mp4';item={'path':str(media),'seconds':7.5,'start':2,'end':8,'gain':45,'mute':True}
             lists=[{'name':'現場','items':[item]}];layout=[normalize_layer({'kind':'camera','source':'device-1','name':'擷取卡','x':100,'y':80},1)]
             scenes=[{'name':'開場','layout':layout,'settings':{'volume':60}}]
             save_project(path,lists,{'effect':'淡入淡出'},scenes,layout);data=load_project(path)
