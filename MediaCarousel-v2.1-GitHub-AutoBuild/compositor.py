@@ -60,7 +60,7 @@ class MediaDeck:
             self.image.setScale(s);self.image.setPos((w-iw*s)/2,(h-ih*s)/2)
         else:
             self.video.setSize(QSizeF(w,h));self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.layer.c.get('fit') else Qt.KeepAspectRatio);self.video.setPos(0,0);self.video.setScale(1)
-        self.base=self.item.pos();self.scale=self.item.scale();self.item.setTransformOriginPoint(self.item.boundingRect().center())
+        self.base=self.item.pos();self.scale=self.item.scale();self.item.setTransformOriginPoint(0,0)
     def gain(self):
         return 0 if self.config.get('mute') else self.config.get('gain',100)/100
 
@@ -205,7 +205,7 @@ class Compositor(QDockWidget):
         v.addWidget(QLabel('場景記憶（自動保存）'))
         self.scene_list=QComboBox();v.addWidget(self.scene_list)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'記憶新場景',self.remember);self.button(row,'載入',self.recall);self.button(row,'覆寫',self.overwrite);self.button(row,'改名',self.rename_scene);self.button(row,'刪除',self.delete_scene)
-        note=QLabel('輸出固定 1920×1080。外部擷取由「播放」啟動；場景載入後需重新播放。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
+        note=QLabel('編輯畫布 1920×1080；投影依所選螢幕縮放。外部擷取由「播放」啟動；場景載入後需重新播放。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
         self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(16);self.last=time.monotonic()
         self.refresh_groups();host.screen.scene().selectionChanged.connect(self.scene_selection)
     def button(self,row,name,fn):

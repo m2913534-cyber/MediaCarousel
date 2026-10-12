@@ -18,9 +18,15 @@ class Screen(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setRenderHints(QPainter.Antialiasing|QPainter.SmoothPixmapTransform)
         self.setWindowTitle('Media Carousel — 播放輸出'); self.resize(960,540)
-        self.exit_callback=None
+        self.exit_callback=None;self.fit_mode=0
+    def refit(self):
+        r=self.sceneRect();v=self.viewport().size()
+        if not r.width() or not r.height():return
+        sx,sy=v.width()/r.width(),v.height()/r.height()
+        if self.fit_mode!=2:sx=sy=(max if self.fit_mode==1 else min)(sx,sy)
+        self.resetTransform();self.scale(sx,sy);self.centerOn(r.center())
     def resizeEvent(self,event):
-        super().resizeEvent(event); self.fitInView(self.sceneRect(),Qt.KeepAspectRatio)
+        super().resizeEvent(event); self.refit()
     def keyPressEvent(self,event):
         if event.key()==Qt.Key_Escape: self.showNormal()
         else: super().keyPressEvent(event)
@@ -50,7 +56,17 @@ class Deck:
             self.player.setSource(QUrl.fromLocalFile(path))
         self.item.setOpacity(0); self.item.show()
         self.basepos=self.item.pos(); self.basescale=self.item.scale()
-        self.item.setTransformOriginPoint(self.item.boundingRect().center())
+        self.item.setTransformOriginPoint(0,0)
+
+    def relayout(self,fit):
+        self.item.setTransformOriginPoint(0,0)
+        if self.kind=='image' and not self.image.pixmap().isNull():
+            w,h=self.image.pixmap().width(),self.image.pixmap().height()
+            scale=(max if fit else min)(1920/w,1080/h)
+            self.image.setScale(scale);self.image.setPos((1920-w*scale)/2,(1080-h*scale)/2)
+        else:
+            self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
+        self.basepos=self.item.pos();self.basescale=self.item.scale()
 
 class Window(QMainWindow):
     def __init__(self):
@@ -96,12 +112,15 @@ class Window(QMainWindow):
         self.effect=QComboBox(); self.effect.addItems(EFFECTS); row.addWidget(self.effect)
         self.duration=QDoubleSpinBox(); self.duration.setRange(.1,10); self.duration.setValue(1); self.duration.setSuffix(' 秒切換'); row.addWidget(self.duration)
         row=QHBoxLayout(); controls.addLayout(row); row.addWidget(QLabel('音量')); self.volume=QSlider(Qt.Horizontal); self.volume.setRange(0,100); self.volume.setValue(80); row.addWidget(self.volume)
-        self.fit=QComboBox(); self.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）']); row.addWidget(self.fit)
+        self.fit=QComboBox(); self.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）']); row.addWidget(self.fit);self.fit.currentIndexChanged.connect(self.refresh_media_fit)
+        self.button(row,'一鍵滿版',self.fill_output)
+        row=QHBoxLayout();controls.addLayout(row);row.addWidget(QLabel('投影比例'))
+        self.output_fit=QComboBox();self.output_fit.addItems(['滿螢幕（等比例裁切）','完整畫布（保留黑邊）','延展至螢幕（可能變形）']);row.addWidget(self.output_fit);self.output_fit.currentIndexChanged.connect(self.refresh_output_fit)
         self.status=QLabel('加入媒體後即可播放。可拖入檔案；Space 播放／暫停，F11 全螢幕，Esc 離開全螢幕。'); layout.addWidget(self.status)
         self.setAcceptDrops(True); split.setSizes([380,900]); self.refresh_groups()
         from compositor import Compositor
         self.compositor=Compositor(self)
-        self.output_view=Screen();self.output_view.setScene(self.screen.scene());self.output_view.hide()
+        self.output_view=Screen();self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
         self.timer=QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(16); self.last=time.monotonic()
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self,activated=fn)
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self.output_view,activated=fn)
@@ -298,16 +317,26 @@ class Window(QMainWindow):
         if d.kind=='video':
             start,end=clip_bounds(d.config,d.player.duration());d.player.setPosition(start+int((end-start)*self.seek.value()/1000))
         else:self.elapsed=self.lists[self.current[0]]['items'][self.current[1]]['seconds']*self.seek.value()/1000
+    def refresh_media_fit(self,*_):
+        for d in self.decks:d.relayout(self.fit.currentIndex()==1)
+    def refresh_output_fit(self,*_):
+        if hasattr(self,'output_view'):
+            self.output_view.fit_mode=[1,0,2][self.output_fit.currentIndex()];self.output_view.refit()
+    def fill_output(self):
+        if self.compositor.enabled:self.compositor.full_bleed()
+        else:self.fit.setCurrentIndex(1);self.refresh_media_fit()
+        self.output_fit.setCurrentIndex(0);self.refresh_output_fit()
     def output(self):
         self.compositor.edit.setChecked(False)
         if self.output_view.isFullScreen():self.output_view.showNormal()
         else:self.output_view.showFullScreen()
+        QTimer.singleShot(0,self.output_view.refit)
     def choose_output(self):
-        screens=QApplication.screens();labels=[f'{i+1}. {s.name()} / {s.size().width()}×{s.size().height()}' for i,s in enumerate(screens)]
+        screens=QApplication.screens();labels=[f'{i+1}. {s.name()} / {round(s.size().width()*s.devicePixelRatio())}×{round(s.size().height()*s.devicePixelRatio())} 像素（縮放 {s.devicePixelRatio():g}×）' for i,s in enumerate(screens)]
         label,ok=QInputDialog.getItem(self,'選擇輸出螢幕','螢幕',labels,0,False)
         if ok:
-            screen=screens[labels.index(label)];self.output_view.showNormal();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
-    def settings(self):return {'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
+            screen=screens[labels.index(label)];self.output_view.showNormal();self.output_view.winId();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
+    def settings(self):return {'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
     def save(self):
         path,_=QFileDialog.getSaveFileName(self,'儲存輪播專案','','輪播專案 (*.mcarousel)')
         if path:
@@ -323,7 +352,7 @@ class Window(QMainWindow):
             self.session_ready=True;self.persist_session()
         except Exception as e:QMessageBox.warning(self,'開啟失敗',str(e))
     def apply_settings(self,s):
-        self.mode.setCurrentText(s.get('mode',MODES[0]));self.effect.setCurrentText(s.get('effect',EFFECTS[0]));self.duration.setValue(float(s.get('duration',1)));self.volume.setValue(int(s.get('volume',80)));self.fit.setCurrentIndex(int(s.get('fit',0)))
+        self.mode.setCurrentText(s.get('mode',MODES[0]));self.effect.setCurrentText(s.get('effect',EFFECTS[0]));self.duration.setValue(float(s.get('duration',1)));self.volume.setValue(int(s.get('volume',80)));self.fit.setCurrentIndex(int(s.get('fit',0)));self.output_fit.setCurrentIndex(int(s.get('output_fit',0)))
     def formats(self):
         fmt=QMediaFormat();formats=fmt.supportedFileFormats(QMediaFormat.Decode);codecs=fmt.supportedVideoCodecs(QMediaFormat.Decode)
         QMessageBox.information(self,'這台電腦的解碼能力','封裝格式：\n'+', '.join(QMediaFormat.fileFormatName(f) for f in formats)+'\n\n影片編碼：\n'+', '.join(QMediaFormat.videoCodecName(c) for c in codecs)+'\n\n副檔名不代表編碼。受 DRM 保護、損壞或未支援的編碼無法保證播放。')
