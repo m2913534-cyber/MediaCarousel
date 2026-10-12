@@ -11,7 +11,7 @@ class Tests(unittest.TestCase):
             lists=[{'name':'現場','items':[item]}];layout=[normalize_layer({'kind':'camera','source':'device-1','name':'擷取卡','x':100,'y':80},1)]
             scenes=[{'name':'開場','layout':layout,'settings':{'volume':60}}]
             save_project(path,lists,{'effect':'淡入淡出'},scenes,layout);data=load_project(path)
-            self.assertEqual(data['lists'],lists);self.assertEqual(data['layout'],layout);self.assertEqual(data['scenes'],scenes);self.assertNotIn(str(media),path.read_text())
+            self.assertEqual(data['lists'],lists);self.assertEqual(data['layout'],layout);self.assertEqual(data['scenes'],scenes);self.assertNotIn(str(media),path.read_text(encoding='utf-8'))
     def test_v1_migration(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'v1.mcarousel';p.write_text(json.dumps({'version':1,'lists':self.lists,'settings':{}}));data=load_project(p)
