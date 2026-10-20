@@ -1,29 +1,33 @@
-# MediaCarousel 2.0 — GitHub 自動打包
+# MediaCarousel — Windows / Mac 桌面版
 
-這個專案包包含程式與自動打包設定，尚未包含執行檔。GitHub 工作流程成功後，才能下載 Windows／Mac 執行包。使用端不需安裝 Python。
+## 正式版本下載
 
-## 第一次設定（建議使用電腦）
+**[下載最新正式版](https://github.com/m2913534-cyber/MediaCarousel/releases/latest)**
 
-1. 登入 https://github.com ，右上角「＋」→ New repository，名稱可填 `MediaCarousel`，建立儲存庫。不要上傳私人影片或密碼。公開庫內容人人可看；私人庫 Actions 使用量依帳戶配額計算。
-2. 解壓縮本包。進入解壓縮資料夾，把裡面的程式檔案上傳到儲存庫根目錄（Add file → Upload files），再 Commit changes。不要只上傳 ZIP，也不要把所有檔案包在另一層 MediaCarousel 資料夾。
-3. 網頁上傳可能漏掉隱藏的 `.github` 資料夾。請檢查儲存庫是否有 `.github/workflows/build-desktop.yml`。若沒有，點 Add file → Create new file，檔名輸入 `.github/workflows/build-desktop.yml`，把本包 `GitHub-workflow-copy.txt` 的全部內容貼入，再 Commit changes。若以 Git 上傳整個目錄，這一步可省略。
-4. 點儲存庫上方 Actions。若顯示啟用提示，啟用此儲存庫的 Actions。選「Build desktop apps」→ Run workflow → Run workflow。正常的 main/master 上傳也會自動觸發。
-5. 等三項建置各自完成。點該次執行紀錄，下方 Artifacts 可下載三個版本。需要登入 GitHub 並具備儲存庫讀取權限。
+每個正式版本提供：
 
-## 下載後開啟
+| 平台 | Release 附件 | 使用方式 |
+| --- | --- | --- |
+| Windows x64 | `MediaCarousel-Windows-x64.zip` | 解壓一次，開啟 `MediaCarousel/MediaCarousel.exe`；請保留整個資料夾 |
+| Mac Apple Silicon（含 M3 Max） | `MediaCarousel-Mac-Apple-Silicon.zip` | 解壓一次，將 `MediaCarousel.app` 拖進「應用程式」後開啟 |
+| Mac Intel | `MediaCarousel-Mac-Intel.zip` | 解壓一次，將 `MediaCarousel.app` 拖進「應用程式」後開啟 |
 
-| 電腦 | 下載項目 | 開啟方式 |
-|---|---|---|
-| Windows 64 位元 | MediaCarousel-Windows-x64 | 解壓縮 GitHub 下載包，再解壓縮裡面的執行包，打開 MediaCarousel 資料夾內的 MediaCarousel.exe。整個資料夾都要保留。 |
-| Mac M1／M2／M3／M4 等 Apple 晶片 | MediaCarousel-Mac-Apple-Silicon | 解壓縮兩層包，將 MediaCarousel.app 放入「應用程式」，再開啟。M3 Max 使用此版。 |
-| Mac Intel | MediaCarousel-Mac-Intel | 解壓縮兩層包，將 MediaCarousel.app 放入「應用程式」，再開啟。 |
+正式 Release 另附 `SHA256SUMS.txt`，用來檢查下載檔案是否完整。Windows PowerShell 可用 `Get-FileHash .\\MediaCarousel-Windows-x64.zip -Algorithm SHA256`；Mac 終端機可用 `shasum -a 256 MediaCarousel-Mac-Apple-Silicon.zip`（Intel 請替換檔名），將結果與清單比對。
 
-這些包未使用 Windows 商業簽章，也未做 Apple Developer ID 簽章／公證，首次開啟可能受到系統攔截。在 Mac 確認為自己的儲存庫產物後，可依「系統設定 → 隱私權與安全性」的提示允許開啟，不需關閉系統整體保護。攝影機及螢幕擷取須授予相應權限。
+**注意：** 尚未使用 Windows 商業程式碼簽章，Mac 也尚未進行 Apple Developer ID 簽章與公證。Mac 首次開啟若遭阻擋，請先確認檔案來源，再到「系統設定 → 隱私權與安全性」允許開啟；不要關閉系統整體安全保護。擷取裝置、攝影機、螢幕錄製等權限仍需自行授權。
 
-## 測試範圍與失敗處理
+## 維護者：建立正式版本
 
-工作流程會執行資料模型測試，打包後在該作業系統啟動成品，確認視窗與影片解碼器可初始化。這不等於驗證所有影片播放、12 路效能、音訊或實體擷取卡；請先用自己的媒體與設備測試再上正式活動。
+1. 先將更新合併到 `main`，確認一般建置流程三平台成功。
+2. 建立指向已審核 commit 的新版本標籤（例如 `v2.1.0`）並推送：`git tag v2.1.0 && git push origin v2.1.0`。標籤請勿重複使用。
+3. `Build desktop apps` 會針對該標籤重新建置三平台，執行 `ci_verify.py`，產生完整 ZIP；全部成功後才建立 GitHub Release。
+4. Release 附件會有三個 ZIP、`SHA256SUMS.txt`，以及 GitHub 自動產生的版本更新紀錄。請在正式對外公告前檢查版本說明，補充人工測試結果與已知限制。
+5. 若發佈失敗，查看 Actions 錯誤並修復；不要把失敗的標籤當成正式可下載版本。
 
-若某個建置顯示紅色叉號，點進失敗步驟，複製錯誤訊息給我。我會修正對應設定。不要只下載原始碼（Code → Download ZIP）；執行檔在 Actions → 執行紀錄 → Artifacts。
+平常推送 `main` 或手動執行工作流程仍只建立暫存 Artifacts，保留 30 天。**只有推送 `v*` 版本標籤會觸發 Release**。正式下載請使用 Releases 頁面，不要分享 Artifacts 暫時網址。
 
-沒有自動發佈公開 Release。Artifacts 設定保留 30 天；到期可重新執行工作流程。
+## 測試界線
+
+CI 執行建置及 `ci_verify.py` 的自動檢查，並驗證 ZIP 可解壓。這**不代表**已在實際 Windows、Mac M3 Max、Intel Mac 裝置完成安裝、開啟、影片解碼、12 畫面效能、音訊輸出或擷取卡驗證。正式活動前仍須以實際設備、素材及輸出裝置進行測試。
+
+這項發佈流程只改變包裝與下載方式，不承諾修改或修復播放器功能。
