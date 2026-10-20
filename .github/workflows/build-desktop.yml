@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -60,3 +61,45 @@ jobs:
           path: MediaCarousel-v2.1-GitHub-AutoBuild/packages/*.zip
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all platform packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: MediaCarousel-*
+          path: release
+          merge-multiple: true
+      - name: Verify required packages and generate SHA256
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in MediaCarousel-Windows-x64.zip MediaCarousel-Mac-Apple-Silicon.zip MediaCarousel-Mac-Intel.zip; do
+            test -s "$f" || { echo "::error::Missing or empty $f"; exit 1; }
+            unzip -t "$f" >/dev/null
+          done
+          sha256sum MediaCarousel-Windows-x64.zip MediaCarousel-Mac-Apple-Silicon.zip MediaCarousel-Mac-Intel.zip > SHA256SUMS.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Release already exists; refusing to overwrite published assets."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release/*.zip release/SHA256SUMS.txt \
+            --title "MediaCarousel $RELEASE_TAG" \
+            --generate-notes \
+            --verify-tag \
+            --latest
