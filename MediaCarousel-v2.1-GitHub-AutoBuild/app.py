@@ -2,10 +2,10 @@ import os, sys, time, random, json
 os.environ.setdefault('QT_MEDIA_BACKEND','ffmpeg')
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QUrl, QSizeF, QRectF, QStandardPaths
-from PySide6.QtGui import QPixmap, QPainter, QShortcut, QKeySequence, QImageReader
+from PySide6.QtGui import QPen,QPixmap, QPainter, QShortcut, QKeySequence, QImageReader
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
     QPushButton,QLabel,QComboBox,QDoubleSpinBox,QSlider,QListWidget,QListWidgetItem,
-    QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox)
+    QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds
@@ -14,6 +14,7 @@ class Screen(QGraphicsView):
     def __init__(self):
         super().__init__()
         self.setScene(QGraphicsScene(self)); self.setSceneRect(0,0,1920,1080)
+        self.canvas_root=QGraphicsRectItem(0,0,1920,1080);self.canvas_root.setPen(QPen(Qt.NoPen));self.canvas_root.setBrush(Qt.black);self.canvas_root.setFlag(QGraphicsItem.ItemClipsChildrenToShape);self.scene().addItem(self.canvas_root)
         self.setBackgroundBrush(Qt.black); self.setFrameShape(QGraphicsView.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setRenderHints(QPainter.Antialiasing|QPainter.SmoothPixmapTransform)
@@ -36,8 +37,8 @@ class Screen(QGraphicsView):
 
 class Deck:
     def __init__(self,screen):
-        self.screen=screen;self.last_frame=None;self.video=QGraphicsVideoItem(); self.video.setSize(QSizeF(1920,1080))
-        self.image=QGraphicsPixmapItem(); screen.scene().addItem(self.video); screen.scene().addItem(self.image)
+        self.screen=screen;self.last_frame=None;self.video=QGraphicsVideoItem(screen.canvas_root); self.video.setSize(QSizeF(1920,1080))
+        self.image=QGraphicsPixmapItem(screen.canvas_root)
         self.audio=QAudioOutput(); self.player=QMediaPlayer(); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
         self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
         self.item=self.image; self.kind='image'; self.config={}; self.clip_loaded=False; self.clear()
@@ -78,7 +79,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.2｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.2.1｜影音輪播工作台'); self.resize(1320,820)
         self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -99,6 +100,8 @@ class Window(QMainWindow):
         row=QHBoxLayout(); panel.addLayout(row); self.button(row,'↑ 上移',lambda:self.move(-1)); self.button(row,'↓ 下移',lambda:self.move(1))
         row=QHBoxLayout(); panel.addLayout(row); row.addWidget(QLabel('所選圖片秒數'))
         self.seconds=QDoubleSpinBox(); self.seconds.setRange(.5,86400); self.seconds.setValue(5); self.seconds.setSuffix(' 秒'); self.seconds.valueChanged.connect(self.set_seconds); row.addWidget(self.seconds)
+        self.button(panel,'套用到選取格子',lambda:self.compositor.use_selected_file())
+        self.button(panel,'自由拖曳／縮放所選檔案',self.free_transform)
         self.button(panel,'套用秒數到本清單所有圖片',self.apply_seconds)
         panel.addWidget(QLabel('影片片段／聲音（保留原始檔案）'))
         row=QHBoxLayout();panel.addLayout(row);row.addWidget(QLabel('開始秒'))
@@ -247,8 +250,19 @@ class Window(QMainWindow):
         row=self.files.currentRow(); items=self.lists[self.group_index()]['items']; target=row+delta
         if row>=0 and 0<=target<len(items):self.stop(); items[row],items[target]=items[target],items[row]; self.render(); self.files.setCurrentRow(target)
     def play_selected(self):
-        if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return
+        if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.use_selected_file();return
         self.failed.clear(); row=max(0,self.files.currentRow()); self.request((self.group_index(),row))
+    def free_transform(self):
+        c=self.compositor
+        if not c.enabled:
+            if self.files.currentRow()<0:
+                self.status.setText('請先在左側選取照片或影片');return
+            c.enable.setChecked(True)
+            c.add({'name':'自由畫面','group':self.group_index(),'w':c.width_px,'h':c.height_px,'fit':True})
+            c.use_selected_file()
+        elif c.selected() is None:
+            self.status.setText('請先點選要調整的格子');return
+        c.edit.setChecked(True);c.show();self.status.setText('拖曳影像移動位置；拖曳右下角綠色方塊改變寬高。')
     def toggle(self):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return
         if self.held:self.request(self.current);return
@@ -403,12 +417,12 @@ class Window(QMainWindow):
             height,ok=QInputDialog.getInt(self,'自訂畫布','高度（像素）',int(self.screen.sceneRect().height()),45,4096)
             if not ok:return
         else:width,height=map(int,choice.split()[0].split('×'))
-        self.set_canvas(width,height);self.persist_session()
+        self.set_canvas(width,height);self.output_fit.setCurrentIndex(1);self.persist_session()
         self.status.setText(f'畫布 {width}×{height} 像素；全螢幕輸出依目標螢幕實際解析度。')
     def set_canvas(self,width,height):
         width=max(80,min(4096,int(width)));height=max(45,min(4096,int(height)))
         old=self.screen.sceneRect();sx,sy=width/old.width(),height/old.height()
-        self.screen.scene().setSceneRect(0,0,width,height)
+        self.screen.scene().setSceneRect(0,0,width,height);self.screen.canvas_root.setRect(0,0,width,height)
         for view in (self.screen,self.output_view,self.preview_view):view.setSceneRect(0,0,width,height);view.refit()
         for layer in self.compositor.layers:
             x,y=layer.pos().x()*sx,layer.pos().y()*sy;layer.resize_to(layer.c['w']*sx,layer.c['h']*sy);layer.setPos(x,y)

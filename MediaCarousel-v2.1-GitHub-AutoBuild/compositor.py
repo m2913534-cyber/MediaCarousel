@@ -23,10 +23,12 @@ class Handle(QGraphicsRectItem):
     def paint(self,painter,option,widget=None):
         if not clean_view(widget):super().paint(painter,option,widget)
     def __init__(self,parent):
-        super().__init__(0,0,22,22,parent);self.setBrush(QColor('#6ee7d4'));self.setPen(QPen(Qt.NoPen));self.setZValue(10000)
+        super().__init__(-18,-18,18,18,parent);self.setFlag(QGraphicsItem.ItemIgnoresTransformations);self.setBrush(QColor('#6ee7d4'));self.setPen(QPen(Qt.NoPen));self.setZValue(10000)
         self.setCursor(Qt.SizeFDiagCursor)
     def mousePressEvent(self,e):
         self.origin=e.scenePos();p=self.parentItem();self.size=(p.c['w'],p.c['h']);e.accept()
+    def mouseReleaseEvent(self,e):
+        self.parentItem().panel.host.persist_session();e.accept()
     def mouseMoveEvent(self,e):
         p=self.parentItem();delta=e.scenePos()-self.origin
         p.resize_to(min(p.panel.width_px-p.pos().x(),max(80,self.size[0]+delta.x())),min(p.panel.height_px-p.pos().y(),max(45,self.size[1]+delta.y())))
@@ -80,7 +82,7 @@ class MediaDeck:
 
 class Layer(QGraphicsRectItem):
     def __init__(self,panel,c):
-        super().__init__();self.panel=panel;self.c=normalize_layer(c,len(panel.host.lists),panel.width_px,panel.height_px);self.capture=None;self.session=None
+        super().__init__(panel.host.screen.canvas_root);self.panel=panel;self.c=normalize_layer(c,len(panel.host.lists),panel.width_px,panel.height_px);self.capture=None;self.session=None
         self.setBrush(QBrush(Qt.black));self.setFlag(QGraphicsItem.ItemClipsChildrenToShape)
         self.setFlags(self.flags()|QGraphicsItem.ItemIsMovable|QGraphicsItem.ItemIsSelectable|QGraphicsItem.ItemSendsGeometryChanges)
         self.setCursor(Qt.OpenHandCursor);self.setZValue(10+len(panel.layers))
@@ -105,7 +107,7 @@ class Layer(QGraphicsRectItem):
             if self.isSelected():self.panel.sync_controls()
         return super().itemChange(change,value)
     def resize_to(self,w,h):
-        self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w-22,h-22)
+        self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w,h)
         for d in self.decks:d.layout()
         if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h));self.capture_video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.c.get('fit') else Qt.KeepAspectRatio)
     def editable(self,enabled):
@@ -230,12 +232,12 @@ class Compositor(QDockWidget):
         scroll=QScrollArea();scroll.setWidgetResizable(True);self.setWidget(scroll)
         body=QWidget();scroll.setWidget(body);v=QVBoxLayout(body)
         self.enable=QCheckBox('啟用多畫面（最多 12 個）');v.addWidget(self.enable);self.enable.toggled.connect(self.set_enabled)
-        self.edit=QCheckBox('顯示拖曳框與尺寸控制');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
+        self.edit=QCheckBox('自由拖曳／縮放（右下角綠色方塊）');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
         self.performance=QCheckBox('多畫面效能模式（直接切換）');self.performance.setChecked(True);v.addWidget(self.performance)
         self.list=QListWidget();self.list.setMaximumHeight(160);v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'＋清單畫面',self.add_playlist);self.button(row,'＋外部擷取',self.add_capture);self.button(row,'移除',self.remove)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media);self.button(row,'更換此格檔案',self.replace_media)
+        row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media);self.button(row,'從播放列表選檔',self.replace_media)
         self.group=QComboBox();v.addWidget(self.group);self.group.currentIndexChanged.connect(self.change_group)
         detail=QWidget();detail_layout=QVBoxLayout(detail);detail_layout.setContentsMargins(0,0,0,0)
         toggle=QPushButton('▸ 尺寸、音量與圖層');toggle.setCheckable(True);v.addWidget(toggle);v.addWidget(detail);detail.hide();toggle.toggled.connect(detail.setVisible)
@@ -300,7 +302,7 @@ class Compositor(QDockWidget):
         if l:l.stop();l.c['group']=max(0,index)
     def add(self,c):
         if len(self.layers)>=MAX_LAYERS:QMessageBox.information(self.host,'畫面上限','最多可添加 12 個畫面。');return
-        l=Layer(self,c);self.host.screen.scene().addItem(l);self.layers.append(l);l.setVisible(self.enabled);l.editable(self.edit.isChecked());self.refresh();self.list.setCurrentRow(len(self.layers)-1)
+        l=Layer(self,c);self.layers.append(l);l.setVisible(self.enabled);l.editable(self.edit.isChecked());self.refresh();self.list.setCurrentRow(len(self.layers)-1)
     def add_playlist(self):
         self.enable.setChecked(True);self.add({'kind':'playlist','group':self.host.group_index(),'name':f'畫面 {len(self.layers)+1}','x':40*len(self.layers),'y':30*len(self.layers),'w':640,'h':360})
     def add_media(self):
@@ -317,18 +319,29 @@ class Compositor(QDockWidget):
         l=self.selected()
         if l is None:
             self.host.status.setText('請先選擇格子，或按 2×2 建立格子');return
-        paths,_=QFileDialog.getOpenFileNames(self.host,'選擇此格照片／影片','','照片與影片 (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff *.gif *.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有檔案 (*)')
-        if not paths:return
-        self.assign_media(l,paths)
-    def assign_media(self,l,paths):
-        if not paths:return
-        l.stop();group=len(self.host.lists)
-        name=Path(paths[0]).stem
-        self.host.lists.append({'name':name,'items':[{'path':p,'seconds':5,'start':0,'end':0,'gain':100,'mute':False} for p in paths]})
+        choices=[(g,i,f"{g+1}-{i+1}｜{group['name']} / {Path(item['path']).name}") for g,group in enumerate(self.host.lists) for i,item in enumerate(group['items'])]
+        if not choices:self.host.status.setText('請先將檔案加入左側播放列表');return
+        labels=[x[2] for x in choices]
+        choice,ok=QInputDialog.getItem(self.host,'從播放列表選擇','此格要播放的檔案',labels,0,False)
+        if ok:
+            g,i,_=choices[labels.index(choice)];self.assign_items(l,[self.host.lists[g]['items'][i]])
+    def use_selected_file(self):
+        l=self.selected();g=self.host.group_index();i=self.host.files.currentRow()
+        if l is None:self.host.status.setText('請先點選畫布上的格子');return
+        if not 0<=i<len(self.host.lists[g]['items']):self.host.status.setText('請先在左側選取檔案');return
+        self.assign_items(l,[self.host.lists[g]['items'][i]])
+    def assign_items(self,l,items):
+        if not items:return
+        selected_group=self.host.group_index();selected_row=self.host.files.currentRow()
+        l.stop();group=len(self.host.lists);name=Path(items[0]['path']).stem
+        self.host.lists.append({'name':name,'items':deepcopy(items)})
         l.c.update(kind='playlist',group=group,name=name,fit=True)
         l.label.setText(name);l.resize_to(l.c['w'],l.c['h'])
-        self.host.refresh_groups(group);self.refresh();self.list.setCurrentRow(self.layers.index(l));self.sync_controls()
+        self.host.refresh_groups(selected_group);self.host.files.setCurrentRow(selected_row)
+        self.refresh();self.list.setCurrentRow(self.layers.index(l));self.sync_controls()
         self.enable.setChecked(True);l.start();self.host.persist_session()
+    def assign_media(self,l,paths):
+        self.assign_items(l,[{'path':p,'seconds':5,'start':0,'end':0,'gain':100,'mute':False} for p in paths])
     def scale_selected(self,factor):
         l=self.selected()
         if not l:return
@@ -378,7 +391,7 @@ class Compositor(QDockWidget):
             l.c['fit']=True
             l.resize_to(self.width_px/cols,self.height_px/rows);l.setPos((i%cols)*self.width_px/cols,(i//cols)*self.height_px/rows)
         self.list.setCurrentRow(0);self.sync_controls();self.host.persist_session()
-        self.host.status.setText('雙擊各格或按「更換此格檔案」選擇內容；每格預設裁切填滿。')
+        self.host.status.setText('選取格子後，選左側檔案並按「套用到選取格子」；每格預設裁切填滿。')
     def apply_template(self):
         name=self.templates.currentText()
         grids={'左右雙畫面':(2,1),'上下雙畫面':(1,2),'三欄':(3,1),'三列':(1,3)}
