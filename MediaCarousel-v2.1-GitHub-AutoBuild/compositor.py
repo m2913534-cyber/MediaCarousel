@@ -23,7 +23,7 @@ class Handle(QGraphicsRectItem):
     def paint(self,painter,option,widget=None):
         if not clean_view(widget):super().paint(painter,option,widget)
     def __init__(self,parent):
-        super().__init__(-18,-18,18,18,parent);self.setFlag(QGraphicsItem.ItemIgnoresTransformations);self.setBrush(QColor('#6ee7d4'));self.setPen(QPen(Qt.NoPen));self.setZValue(10000)
+        super().__init__(0,0,22,22,parent);self.setBrush(QColor('#6ee7d4'));self.setPen(QPen(Qt.NoPen));self.setZValue(10000)
         self.setCursor(Qt.SizeFDiagCursor)
     def mousePressEvent(self,e):
         self.origin=e.scenePos();p=self.parentItem();self.size=(p.c['w'],p.c['h']);e.accept()
@@ -107,7 +107,7 @@ class Layer(QGraphicsRectItem):
             if self.isSelected():self.panel.sync_controls()
         return super().itemChange(change,value)
     def resize_to(self,w,h):
-        self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w,h)
+        self.c['fit']=True;self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w-22,h-22)
         for d in self.decks:d.layout()
         if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h));self.capture_video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.c.get('fit') else Qt.KeepAspectRatio)
     def editable(self,enabled):
@@ -232,7 +232,7 @@ class Compositor(QDockWidget):
         scroll=QScrollArea();scroll.setWidgetResizable(True);self.setWidget(scroll)
         body=QWidget();scroll.setWidget(body);v=QVBoxLayout(body)
         self.enable=QCheckBox('啟用多畫面（最多 12 個）');v.addWidget(self.enable);self.enable.toggled.connect(self.set_enabled)
-        self.edit=QCheckBox('自由拖曳／縮放（右下角綠色方塊）');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
+        self.edit=QCheckBox('顯示格子拖曳框與尺寸控制');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
         self.performance=QCheckBox('多畫面效能模式（直接切換）');self.performance.setChecked(True);v.addWidget(self.performance)
         self.list=QListWidget();self.list.setMaximumHeight(160);v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
         row=QHBoxLayout();v.addLayout(row)
@@ -248,7 +248,7 @@ class Compositor(QDockWidget):
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'縮小 −10%',lambda:self.scale_selected(.9));self.button(row,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(row,'填滿此格',self.full_bleed)
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
-        self.fit=QCheckBox('填滿此畫面（裁切）');v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
+        self.fit=QCheckBox('影像固定填滿格子（裁切）');self.fit.setChecked(True);self.fit.setEnabled(False);v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'移到上層',lambda:self.reorder(1));self.button(row,'移到下層',lambda:self.reorder(-1))
         v=outer
         row=QHBoxLayout();v.addLayout(row);self.button(row,'2×2',lambda:self.grid(2,2));self.button(row,'3×2',lambda:self.grid(3,2));self.button(row,'4×3',lambda:self.grid(4,3))

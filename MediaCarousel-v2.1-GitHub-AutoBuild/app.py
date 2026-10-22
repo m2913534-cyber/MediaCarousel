@@ -2,7 +2,7 @@ import os, sys, time, random, json
 os.environ.setdefault('QT_MEDIA_BACKEND','ffmpeg')
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QUrl, QSizeF, QRectF, QStandardPaths
-from PySide6.QtGui import QPen,QPixmap, QPainter, QShortcut, QKeySequence, QImageReader
+from PySide6.QtGui import QTransform,QPen,QPixmap, QPainter, QShortcut, QKeySequence, QImageReader
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
     QPushButton,QLabel,QComboBox,QDoubleSpinBox,QSlider,QListWidget,QListWidgetItem,
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
@@ -37,8 +37,8 @@ class Screen(QGraphicsView):
 
 class Deck:
     def __init__(self,screen):
-        self.screen=screen;self.last_frame=None;self.video=QGraphicsVideoItem(screen.canvas_root); self.video.setSize(QSizeF(1920,1080))
-        self.image=QGraphicsPixmapItem(screen.canvas_root)
+        self.screen=screen;self.root=QGraphicsRectItem(screen.canvas_root);self.root.setPen(QPen(Qt.NoPen));self.last_frame=None;self.video=QGraphicsVideoItem(self.root); self.video.setSize(QSizeF(1920,1080))
+        self.image=QGraphicsPixmapItem(self.root)
         self.audio=QAudioOutput(); self.player=QMediaPlayer(); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
         self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
         self.item=self.image; self.kind='image'; self.config={}; self.clip_loaded=False; self.clear()
@@ -48,7 +48,7 @@ class Deck:
         self.player.pause()
         if self.kind=='video' and self.last_frame is not None:
             self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setPos(self.video.pos());self.image.setZValue(self.video.zValue())
-            self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.video.aspectRatioMode()==Qt.KeepAspectRatioByExpanding);self.image.setOpacity(1);self.image.show()
+            self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.fit_mode);self.image.setOpacity(1);self.image.show()
     def clear(self):
         self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
     def load(self,path,fit,config=None):
@@ -63,23 +63,27 @@ class Deck:
             self.kind='video'; self.item=self.video; self.video.setScale(1); self.video.setPos(0,0)
             self.video.setSize(self.screen.sceneRect().size());self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
             self.player.setSource(QUrl.fromLocalFile(path))
-        self.item.setOpacity(0); self.item.show()
+        self.relayout(fit);self.item.setOpacity(0); self.item.show()
         self.basepos=self.item.pos(); self.basescale=self.item.scale()
         self.item.setTransformOriginPoint(0,0)
 
+    def apply_transform(self):
+        r=self.screen.sceneRect();self.root.setPos(self.config.get('single_x',0)*r.width(),self.config.get('single_y',0)*r.height());self.root.setScale(self.config.get('single_zoom',1))
     def relayout(self,fit):
-        self.item.setTransformOriginPoint(0,0)
+        self.fit_mode=int(fit);self.item.setTransformOriginPoint(0,0);cw,ch=self.screen.sceneRect().width(),self.screen.sceneRect().height()
+        self.image.setTransform(QTransform());self.image.setScale(1)
         if self.kind=='image' and not self.image.pixmap().isNull():
             w,h=self.image.pixmap().width(),self.image.pixmap().height()
-            scale=(max if fit else min)(self.screen.sceneRect().width()/w,self.screen.sceneRect().height()/h)
-            self.image.setScale(scale);self.image.setPos((self.screen.sceneRect().width()-w*scale)/2,(self.screen.sceneRect().height()-h*scale)/2)
+            if fit==2:self.image.setTransform(QTransform.fromScale(cw/w,ch/h));self.image.setPos(0,0)
+            else:
+                scale=(max if fit else min)(cw/w,ch/h);self.image.setScale(scale);self.image.setPos((cw-w*scale)/2,(ch-h*scale)/2)
         else:
-            self.video.setSize(self.screen.sceneRect().size());self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
-        self.basepos=self.item.pos();self.basescale=self.item.scale()
+            self.video.setSize(self.screen.sceneRect().size());self.video.setAspectRatioMode([Qt.KeepAspectRatio,Qt.KeepAspectRatioByExpanding,Qt.IgnoreAspectRatio][int(fit)])
+        self.basepos=self.item.pos();self.basescale=self.item.scale();self.apply_transform()
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.2.1｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.2.2｜影音輪播工作台'); self.resize(1320,820)
         self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -101,7 +105,7 @@ class Window(QMainWindow):
         row=QHBoxLayout(); panel.addLayout(row); row.addWidget(QLabel('所選圖片秒數'))
         self.seconds=QDoubleSpinBox(); self.seconds.setRange(.5,86400); self.seconds.setValue(5); self.seconds.setSuffix(' 秒'); self.seconds.valueChanged.connect(self.set_seconds); row.addWidget(self.seconds)
         self.button(panel,'套用到選取格子',lambda:self.compositor.use_selected_file())
-        self.button(panel,'自由拖曳／縮放所選檔案',self.free_transform)
+        self.button(panel,'單畫面：開關自由拖曳縮放',self.free_transform)
         self.button(panel,'套用秒數到本清單所有圖片',self.apply_seconds)
         panel.addWidget(QLabel('影片片段／聲音（保留原始檔案）'))
         row=QHBoxLayout();panel.addLayout(row);row.addWidget(QLabel('開始秒'))
@@ -124,7 +128,7 @@ class Window(QMainWindow):
         self.hold_last=QCheckBox('播放一次結束：停留最後一幀');self.hold_last.setChecked(True);controls.addWidget(self.hold_last)
         self.duration=QDoubleSpinBox(); self.duration.setRange(.1,10); self.duration.setValue(1); self.duration.setSuffix(' 秒切換'); row.addWidget(self.duration)
         row=QHBoxLayout(); controls.addLayout(row); row.addWidget(QLabel('音量')); self.volume=QSlider(Qt.Horizontal); self.volume.setRange(0,100); self.volume.setValue(80); row.addWidget(self.volume)
-        self.fit=QComboBox(); self.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）']); row.addWidget(self.fit);self.fit.currentIndexChanged.connect(self.refresh_media_fit)
+        self.fit=QComboBox(); self.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）','強制滿版（拉伸至畫布）']); row.addWidget(self.fit);self.fit.currentIndexChanged.connect(self.refresh_media_fit)
         self.button(row,'一鍵滿版',self.fill_output)
         row=QHBoxLayout();controls.addLayout(row);row.addWidget(QLabel('投影比例'))
         self.output_fit=QComboBox();self.output_fit.addItems(['滿螢幕（等比例裁切）','完整畫布（保留黑邊）','延展至螢幕（可能變形）']);row.addWidget(self.output_fit);self.output_fit.currentIndexChanged.connect(self.refresh_output_fit)
@@ -132,6 +136,8 @@ class Window(QMainWindow):
         self.setAcceptDrops(True); split.setSizes([380,900]); self.refresh_groups()
         from compositor import Compositor
         self.compositor=Compositor(self)
+        from single_editor import SingleEditor
+        self.single_editor=SingleEditor(self)
         self.button(tools,'顯示／收起右側面板',lambda:self.compositor.setVisible(not self.compositor.isVisible()))
         self.button(tools,'畫布像素／4K',self.configure_canvas)
         self.output_view=Screen();self.output_view.viewport().setProperty('clean_output',True);self.output_view.setInteractive(False);self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
@@ -253,16 +259,15 @@ class Window(QMainWindow):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.use_selected_file();return
         self.failed.clear(); row=max(0,self.files.currentRow()); self.request((self.group_index(),row))
     def free_transform(self):
-        c=self.compositor
-        if not c.enabled:
+        if self.compositor.enabled:
+            self.status.setText('自由影像縮放僅用於單畫面；多畫面請拖曳格子，內容會保持填滿。');return
+        self.single_editor.enabled=not self.single_editor.enabled
+        if self.single_editor.enabled and self.current is None:
             if self.files.currentRow()<0:
-                self.status.setText('請先在左側選取照片或影片');return
-            c.enable.setChecked(True)
-            c.add({'name':'自由畫面','group':self.group_index(),'w':c.width_px,'h':c.height_px,'fit':True})
-            c.use_selected_file()
-        elif c.selected() is None:
-            self.status.setText('請先點選要調整的格子');return
-        c.edit.setChecked(True);c.show();self.status.setText('拖曳影像移動位置；拖曳右下角綠色方塊改變寬高。')
+                self.single_editor.enabled=False;self.status.setText('請先在左側選取檔案');return
+            self.play_selected()
+        self.single_editor.sync()
+        self.status.setText('單畫面編輯：拖曳影像移動、右下角縮放；滾輪也可縮放。按一鍵滿版可重設。' if self.single_editor.enabled else '已關閉單畫面拖曳縮放')
     def toggle(self):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return
         if self.held:self.request(self.current);return
@@ -279,6 +284,7 @@ class Window(QMainWindow):
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.current=None; self.elapsed=0
         for d in self.decks:d.clear()
         self.seek.setValue(0); self.status.setText('已停止')
+        if hasattr(self,'single_editor'):self.single_editor.sync()
     def request(self,target):
         if target is None:
             if self.hold_last.isChecked() and self.current is not None:
@@ -291,10 +297,10 @@ class Window(QMainWindow):
         if self.pending or self.transition:return
         self.current=target; self.groups.setCurrentIndex(p); self.files.setCurrentRow(i)
         item=self.lists[p]['items'][i]; idx=1-self.active; self.running=True
-        self.pending={'index':idx,'started':time.monotonic()}; self.elapsed=0
+        self.pending={'index':idx,'started':time.monotonic()}; self.elapsed=0;self.single_editor.sync()
         try:
             if not Path(item['path']).is_file():raise ValueError('找不到檔案')
-            self.decks[idx].load(item['path'],self.fit.currentIndex()==1,item)
+            self.decks[idx].load(item['path'],self.fit.currentIndex(),item)
             if self.decks[idx].kind=='image':self.begin_transition()
             else:self.decks[idx].player.play()
         except Exception as e:self.fail(str(e))
@@ -317,7 +323,7 @@ class Window(QMainWindow):
         idx=self.pending['index']; self.pending=None
         effect=self.effect.currentText()
         if effect=='隨機效果':effect=random.choice(EFFECTS[:-1])
-        self.decks[idx].item.setZValue(2); self.decks[self.active].item.setZValue(1)
+        self.decks[idx].root.setZValue(2);self.decks[self.active].root.setZValue(1);self.decks[idx].item.setZValue(2); self.decks[self.active].item.setZValue(1)
         self.transition={'new':idx,'old':self.active,'time':0.,'effect':effect}
         self.elapsed=0; self.status.setText('播放中：'+Path(self.decks[idx].path).name)
         if effect=='直接切換':self.update_transition(1)
@@ -336,7 +342,7 @@ class Window(QMainWindow):
         a.audio.setVolume(old*self.volume.value()/100*self.deck_gain(a)); b.audio.setVolume(new*self.volume.value()/100*self.deck_gain(b))
         if t>=1:
             a.clear(); b.item.setPos(b.basepos); b.item.setScale(b.basescale); b.item.setOpacity(1)
-            self.active=tr['new']; self.transition=None
+            self.active=tr['new']; self.transition=None;self.single_editor.sync()
     def deck_gain(self,d):return 0 if d.config.get('mute') else d.config.get('gain',100)/100
     def advance(self,reverse=False):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.advance(reverse);return
@@ -375,14 +381,17 @@ class Window(QMainWindow):
             start,end=clip_bounds(d.config,d.player.duration());d.player.setPosition(start+int((end-start)*self.seek.value()/1000))
         else:self.elapsed=self.lists[self.current[0]]['items'][self.current[1]]['seconds']*self.seek.value()/1000
     def refresh_media_fit(self,*_):
-        for d in self.decks:d.relayout(self.fit.currentIndex()==1)
+        for d in self.decks:d.relayout(self.fit.currentIndex())
+        if hasattr(self,'single_editor'):self.single_editor.sync()
     def refresh_output_fit(self,*_):
         if hasattr(self,'output_view'):
             self.output_view.fit_mode=[1,0,2][self.output_fit.currentIndex()];self.output_view.refit()
     def fill_output(self):
         if self.compositor.enabled:self.compositor.full_bleed()
-        else:self.fit.setCurrentIndex(1);self.refresh_media_fit()
-        self.output_fit.setCurrentIndex(0);self.refresh_output_fit()
+        else:
+            if self.current is not None:self.single_editor.apply(0,0,1)
+            self.fit.setCurrentIndex(2);self.refresh_media_fit();self.persist_session()
+        self.output_fit.setCurrentIndex(1);self.refresh_output_fit()
     def output(self):
         if self.output_view.isFullScreen():self.output_view.showNormal()
         else:self.output_view.showFullScreen()
