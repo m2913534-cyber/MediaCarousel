@@ -88,7 +88,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.3｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.3.1｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -210,19 +210,27 @@ class Window(QMainWindow):
         if not 0<=row<len(items):return
         item=items[row]
         if not Path(item['path']).is_file():QMessageBox.warning(self,'檔案遺失','請重新加入影片。');return
-        self.stop()
-        dialog=VideoEditor(item['path'],item,self)
-        if dialog.exec() and dialog.result_config:
-            item.update(dialog.result_config);self.render();self.files.setCurrentRow(row);self.persist_session()
-            self.status.setText('影片片段與音量已更新；原始影片保留。')
-        dialog.deleteLater()
+        if not hasattr(self,'video_editors'):self.video_editors={}
+        key=id(item)
+        if key in self.video_editors:
+            self.video_editors[key].show();self.video_editors[key].raise_();return
+        dialog=VideoEditor(item['path'],item,self);dialog.setAttribute(Qt.WA_DeleteOnClose);self.video_editors[key]=dialog
+        def apply_edit():
+            if not dialog.result_config:return
+            if not any(item is source for group in self.lists for source in group['items']):
+                self.status.setText('原列表來源已移除，這次編輯未套用。');return
+            # Update the saved source. Running decks keep their current playback configuration.
+            item.update(dialog.result_config)
+            selected=self.files.currentRow();self.render();self.files.setCurrentRow(selected);self.persist_session()
+            self.status.setText('編輯已儲存；目前輸出持續播放，重新播放或重新套用來源時生效。')
+        dialog.accepted.connect(apply_edit);dialog.finished.connect(lambda _:self.video_editors.pop(key,None));dialog.show()
     def edit_clip(self):
         row=self.files.currentRow();items=self.lists[self.group_index()]['items']
         if not 0<=row<len(items):return
         start,end=self.clip_start.value(),self.clip_end.value()
         if end and end<=start:QMessageBox.warning(self,'片段錯誤','結束秒數必須大於開始秒數');return
-        self.stop();items[row].update(start=start,end=end,gain=self.clip_gain.value(),mute=self.clip_mute.isChecked())
-        self.status.setText('片段與音量已套用；重新播放即可生效。')
+        items[row].update(start=start,end=end,gain=self.clip_gain.value(),mute=self.clip_mute.isChecked())
+        self.persist_session();self.status.setText('片段與音量已儲存；目前輸出繼續播放，重新播放或套用來源時生效。')
     def set_seconds(self,value):
         row=self.files.currentRow(); items=self.lists[self.group_index()]['items']
         if 0<=row<len(items): items[row]['seconds']=value; self.render(); self.files.setCurrentRow(row)
@@ -463,7 +471,9 @@ class Window(QMainWindow):
     def dragEnterEvent(self,e):
         if e.mimeData().hasUrls():e.acceptProposedAction()
     def dropEvent(self,e):self.add_files([u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()])
-    def closeEvent(self,e):self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();super().closeEvent(e)
+    def closeEvent(self,e):
+        for editor in list(getattr(self,'video_editors',{}).values()):editor.close()
+        self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();super().closeEvent(e)
 
 if __name__=='__main__':
     app=QApplication(sys.argv);app.setApplicationName('Media Carousel');window=Window();window.show()

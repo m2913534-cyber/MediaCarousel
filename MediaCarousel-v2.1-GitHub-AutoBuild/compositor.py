@@ -3,7 +3,7 @@ import time, random
 from copy import deepcopy
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QSizeF, QUrl, QRectF
-from PySide6.QtGui import QPen, QColor, QBrush, QPixmap, QImageReader
+from PySide6.QtGui import QPen, QColor, QBrush, QPixmap, QImageReader,QTransform
 from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTextItem,
     QDockWidget,QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QListWidget,QComboBox,
     QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox,QFileDialog,QScrollArea,QGroupBox)
@@ -38,7 +38,7 @@ class MediaDeck:
     def __init__(self,layer):
         self.layer=layer;self.video=QGraphicsVideoItem(layer);
         from PySide6.QtWidgets import QGraphicsPixmapItem
-        self.image=QGraphicsPixmapItem(layer)
+        self.image=QGraphicsPixmapItem(layer);self.image.setTransformationMode(Qt.SmoothTransformation)
         self.player=QMediaPlayer();
         from audio_meter import AudioProbe
         self.probe=AudioProbe(self.player);self.audio=QAudioOutput();self.player.setAudioOutput(self.audio);self.player.setVideoOutput(self.video)
@@ -69,12 +69,13 @@ class MediaDeck:
         self.layout();self.item.setOpacity(0);self.item.show()
     def layout(self):
         w,h=self.layer.c['w'],self.layer.c['h']
+        # Tile geometry owns both axes. Keep the complete source mapped to its rectangle.
+        self.image.setScale(1);self.image.setTransform(QTransform())
         if self.kind=='image' and not self.image.pixmap().isNull():
             iw,ih=self.image.pixmap().width(),self.image.pixmap().height()
-            s=(max if self.layer.c.get('fit') else min)(w/iw,h/ih)
-            self.image.setScale(s);self.image.setPos((w-iw*s)/2,(h-ih*s)/2)
+            self.image.setTransform(QTransform.fromScale(w/iw,h/ih));self.image.setPos(0,0)
         else:
-            self.video.setSize(QSizeF(w,h));self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.layer.c.get('fit') else Qt.KeepAspectRatio);self.video.setPos(0,0);self.video.setScale(1)
+            self.video.setAspectRatioMode(Qt.IgnoreAspectRatio);self.video.setSize(QSizeF(w,h));self.video.setPos(0,0);self.video.setScale(1)
         self.base=self.item.pos();self.scale=self.item.scale();self.item.setTransformOriginPoint(0,0)
     def freeze(self):
         self.player.pause()
@@ -93,7 +94,7 @@ class Layer(QGraphicsRectItem):
         self.label=EditorLabel(self.c['name'],self);self.label.setBrush(QColor('#6ee7d4'));self.label.setZValue(9999);self.label.setPos(8,8)
         self.handle=Handle(self);self.decks=[MediaDeck(self),MediaDeck(self)];self.active=0;self.current=None;self.pending=None;self.transition=None;self.elapsed=0;self.held=False;self.running=False
         self.resize_to(self.c['w'],self.c['h']);self.setPos(self.c['x'],self.c['y'])
-        self.capture_video=QGraphicsVideoItem(self);self.capture_video.setZValue(3);self.capture_video.setSize(QSizeF(self.c['w'],self.c['h']));self.capture_video.hide()
+        self.capture_video=QGraphicsVideoItem(self);self.capture_video.setZValue(3);self.capture_video.setSize(QSizeF(self.c['w'],self.c['h']));self.capture_video.setAspectRatioMode(Qt.IgnoreAspectRatio);self.capture_video.hide()
         self.editable(True)
     def paint(self,painter,option,widget=None):
         if clean_view(widget):
@@ -113,7 +114,7 @@ class Layer(QGraphicsRectItem):
     def resize_to(self,w,h):
         self.c['fit']=True;self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w-22,h-22)
         for d in self.decks:d.layout()
-        if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h));self.capture_video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.c.get('fit') else Qt.KeepAspectRatio)
+        if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h));self.capture_video.setAspectRatioMode(Qt.IgnoreAspectRatio)
     def editable(self,enabled):
         self.setFlag(QGraphicsItem.ItemIsMovable,enabled);self.setFlag(QGraphicsItem.ItemIsSelectable,enabled)
         self.label.setVisible(enabled);self.handle.setVisible(enabled);self.setPen(QPen(QColor('#6ee7d4'),2) if enabled else QPen(Qt.NoPen))
@@ -264,7 +265,7 @@ class Compositor(QDockWidget):
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'縮小 −10%',lambda:self.scale_selected(.9));self.button(row,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(row,'填滿此格',self.full_bleed)
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
-        self.fit=QCheckBox('影像固定填滿格子（裁切）');self.fit.setChecked(True);self.fit.setEnabled(False);v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
+        self.fit=QCheckBox('影像強制鋪滿格子（拉伸）');self.fit.setChecked(True);self.fit.setEnabled(False);v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'移到上層',lambda:self.reorder(1));self.button(row,'移到下層',lambda:self.reorder(-1))
         v=outer
         row=QHBoxLayout();v.addLayout(row);self.button(row,'2×2',lambda:self.grid(2,2));self.button(row,'3×2',lambda:self.grid(3,2));self.button(row,'4×3',lambda:self.grid(4,3))
@@ -359,7 +360,7 @@ class Compositor(QDockWidget):
         if not l:return
         l.c['fit']=True;l.resize_to(l.c['w'],l.c['h'])
         self.sync_controls();self.host.persist_session()
-        self.host.status.setText('已等比例裁切填滿此格；格子位置與尺寸不變。')
+        self.host.status.setText('已強制拉伸鋪滿此格；格子位置與尺寸不變。')
     def add_capture(self):
         kind,ok=QInputDialog.getItem(self.host,'外部擷取','來源種類',['攝影機／USB HDMI 擷取卡','螢幕','應用程式視窗'],0,False)
         if not ok:return
@@ -393,7 +394,7 @@ class Compositor(QDockWidget):
             l.c['fit']=True
             l.resize_to(self.width_px/cols,self.height_px/rows);l.setPos((i%cols)*self.width_px/cols,(i//cols)*self.height_px/rows)
         self.list.setCurrentRow(0);self.sync_controls();self.host.persist_session()
-        self.host.status.setText('選取格子後，選左側檔案並按「套用到選取格子」；每格預設裁切填滿。')
+        self.host.status.setText('選取格子後，選左側檔案並按「套用到選取格子」；每格強制拉伸滿版。')
     def apply_template(self):
         name=self.templates.currentText()
         grids={'左右雙畫面':(2,1),'上下雙畫面':(1,2),'三欄':(3,1),'三列':(1,3)}
