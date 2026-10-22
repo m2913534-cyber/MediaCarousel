@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTe
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS
+from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name
 
 def clean_view(widget):
     return widget is not None and bool(widget.property('clean_output'))
@@ -39,7 +39,9 @@ class MediaDeck:
         self.layer=layer;self.video=QGraphicsVideoItem(layer);
         from PySide6.QtWidgets import QGraphicsPixmapItem
         self.image=QGraphicsPixmapItem(layer)
-        self.player=QMediaPlayer();self.audio=QAudioOutput();self.player.setAudioOutput(self.audio);self.player.setVideoOutput(self.video)
+        self.player=QMediaPlayer();
+        from audio_meter import AudioProbe
+        self.probe=AudioProbe(self.player);self.audio=QAudioOutput();self.player.setAudioOutput(self.audio);self.player.setVideoOutput(self.video)
         self.last_frame=None;self.kind='image';self.item=self.image;self.config={};self.ready=False;self.loaded=False
         self.player.mediaStatusChanged.connect(self.status)
         self.player.errorOccurred.connect(lambda e,m:layer.error(m))
@@ -49,14 +51,16 @@ class MediaDeck:
         self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.ready=False;self.loaded=False
     def status(self,status):
         if status==QMediaPlayer.LoadedMedia and not self.loaded:
-            self.loaded=True;QTimer.singleShot(0,lambda:self.player.setPosition(clip_bounds(self.config,self.player.duration())[0]))
+            self.loaded=True;QTimer.singleShot(0,lambda:self.player.setPosition(max(clip_bounds(self.config,self.player.duration())[0],min(self.config.pop('_resume_ms',0),max(0,clip_bounds(self.config,self.player.duration())[1]-1)))))
         if status==QMediaPlayer.InvalidMedia:self.layer.error('無法解碼此媒體')
     def frame(self,f):
         if f.isValid():self.ready=True;self.last_frame=f
     def load(self,c):
         self.clear();self.config=deepcopy(c);p=c['path']
-        if not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
-        if Path(p).suffix.lower() in IMAGE_EXT:
+        if c.get('kind')!='black' and not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
+        if c.get('kind')=='black':
+            self.kind='image';self.item=self.image;pix=QPixmap(2,2);pix.fill(Qt.black);self.image.setPixmap(pix);self.ready=True
+        elif Path(p).suffix.lower() in IMAGE_EXT:
             reader=QImageReader(p);reader.setAutoTransform(True);image=reader.read()
             if image.isNull():raise ValueError('圖片讀取失敗')
             self.kind='image';self.item=self.image;self.image.setPixmap(QPixmap.fromImage(image));self.ready=True
@@ -150,18 +154,28 @@ class Layer(QGraphicsRectItem):
         if self.pending or self.transition:return
         self.held=False
         p,i=target
-        if not (0<=p<len(host.lists) and 0<=i<len(host.lists[p]['items'])):self.stop();return
+        items=self.source_items()
+        if not 0<=i<len(items):self.stop();return
+        initial_load=self.current is None
         self.current=target;self.running=True;idx=1-self.active;self.pending=(idx,time.monotonic());self.elapsed=0
-        try:self.decks[idx].load(host.lists[p]['items'][i])
+        try:
+            item=deepcopy(items[i])
+            if initial_load and 'cue_position' in self.c:item['_resume_ms']=self.c['cue_position']
+            self.decks[idx].load(item)
         except Exception as e:self.error(str(e))
+    def source_items(self):
+        if 'items' in self.c:return self.c['items']
+        group=self.c['group'];return self.panel.host.lists[group]['items'] if 0<=group<len(self.panel.host.lists) else []
     def next_target(self,current=None,reverse=False):
         # Each tile stays bound to its own source list, including single-file mode.
         group=self.c['group'];lists=self.panel.host.lists
-        if not 0<=group<len(lists):return None
+        items=self.source_items()
+        if not items:return None
+        if self.current is None and 'cue_index' in self.c:return (group,min(len(items)-1,int(self.c['cue_index'])))
         current=current or self.current or (group,-1)
         mode=self.panel.host.mode.currentText()
         if mode=='所有清單輪播':mode='清單循環'
-        result=following([lists[group]],(0,current[1]),mode,reverse)
+        result=following([{'items':items}],(0,current[1]),mode,reverse)
         return (group,result[1]) if result is not None else None
     def advance(self,reverse=False):
         if self.c['kind']=='playlist':
@@ -231,13 +245,15 @@ class Compositor(QDockWidget):
         host.addDockWidget(Qt.RightDockWidgetArea,self);self.setMinimumWidth(310)
         scroll=QScrollArea();scroll.setWidgetResizable(True);self.setWidget(scroll)
         body=QWidget();scroll.setWidget(body);v=QVBoxLayout(body)
+        from audio_meter import AudioMeter
+        self.meter=AudioMeter(host);v.addWidget(self.meter)
         self.enable=QCheckBox('啟用多畫面（最多 12 個）');v.addWidget(self.enable);self.enable.toggled.connect(self.set_enabled)
         self.edit=QCheckBox('顯示格子拖曳框與尺寸控制');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
         self.performance=QCheckBox('多畫面效能模式（直接切換）');self.performance.setChecked(True);v.addWidget(self.performance)
         self.list=QListWidget();self.list.setMaximumHeight(160);v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'＋清單畫面',self.add_playlist);self.button(row,'＋外部擷取',self.add_capture);self.button(row,'移除',self.remove)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media);self.button(row,'從播放列表選檔',self.replace_media)
+        row=QHBoxLayout();v.addLayout(row);self.button(row,'從播放列表選檔',self.replace_media)
         self.group=QComboBox();v.addWidget(self.group);self.group.currentIndexChanged.connect(self.change_group)
         detail=QWidget();detail_layout=QVBoxLayout(detail);detail_layout.setContentsMargins(0,0,0,0)
         toggle=QPushButton('▸ 尺寸、音量與圖層');toggle.setCheckable(True);v.addWidget(toggle);v.addWidget(detail);detail.hide();toggle.toggled.connect(detail.setVisible)
@@ -254,11 +270,11 @@ class Compositor(QDockWidget):
         row=QHBoxLayout();v.addLayout(row);self.button(row,'2×2',lambda:self.grid(2,2));self.button(row,'3×2',lambda:self.grid(3,2));self.button(row,'4×3',lambda:self.grid(4,3))
         self.templates=QComboBox();self.templates.addItems(['左右雙畫面','上下雙畫面','三欄','三列','主畫面＋右側兩格','左上子畫面','右下子畫面','自訂欄列']);v.addWidget(self.templates)
         self.button(v,'套用版型',self.apply_template)
-        self.button(v,'儲存自訂面板',self.remember)
-        v.addWidget(QLabel('已存面板／場景（含自訂位置尺寸）'))
+        v.addWidget(QLabel('CUE 場景（來源、播放位置、畫布與參數）'))
         self.scene_list=QComboBox();v.addWidget(self.scene_list)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'記憶新場景',self.remember);self.button(row,'載入',self.recall);self.button(row,'覆寫',self.overwrite);self.button(row,'改名',self.rename_scene);self.button(row,'刪除',self.delete_scene)
-        note=QLabel('畫布像素可從上方設定，支援 4K；投影依目標螢幕實際解析度。外部擷取由「播放」啟動；場景載入後需重新播放。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
+        row=QHBoxLayout();v.addLayout(row);self.button(row,'記錄 CUE',self.remember);self.button(row,'GO 召回',self.recall);self.button(row,'覆寫',self.overwrite)
+        row=QHBoxLayout();v.addLayout(row);self.button(row,'下一個 GO',self.next_cue);self.button(row,'改名',self.rename_scene);self.button(row,'刪除',self.delete_scene)
+        note=QLabel('畫布像素可從上方設定，支援 4K；投影依目標螢幕實際解析度。CUE GO 會恢復並播放記憶的來源及位置。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
         self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(16);self.last=time.monotonic()
         self.refresh_groups();host.screen.scene().selectionChanged.connect(self.scene_selection)
     @property
@@ -299,27 +315,18 @@ class Compositor(QDockWidget):
     def change_group(self,index):
         if self.updating:return
         l=self.selected()
-        if l:l.stop();l.c['group']=max(0,index)
+        if l:
+            l.stop();l.c['group']=max(0,index);l.c.pop('items',None);l.c.pop('cue_index',None);l.c.pop('cue_position',None)
     def add(self,c):
         if len(self.layers)>=MAX_LAYERS:QMessageBox.information(self.host,'畫面上限','最多可添加 12 個畫面。');return
         l=Layer(self,c);self.layers.append(l);l.setVisible(self.enabled);l.editable(self.edit.isChecked());self.refresh();self.list.setCurrentRow(len(self.layers)-1)
     def add_playlist(self):
         self.enable.setChecked(True);self.add({'kind':'playlist','group':self.host.group_index(),'name':f'畫面 {len(self.layers)+1}','x':40*len(self.layers),'y':30*len(self.layers),'w':640,'h':360})
-    def add_media(self):
-        if len(self.layers)>=MAX_LAYERS:
-            QMessageBox.information(self.host,'畫面上限','最多可添加 12 個畫面。');return
-        paths,_=QFileDialog.getOpenFileNames(self.host,'新增照片／影片畫面','','所有檔案 (*)')
-        if not paths:return
-        group=len(self.host.lists)
-        self.host.lists.append({'name':Path(paths[0]).stem,'items':[{'path':p,'seconds':5,'start':0,'end':0,'gain':100,'mute':False} for p in paths]})
-        self.host.refresh_groups(group);self.enable.setChecked(True)
-        self.add({'kind':'playlist','group':group,'name':Path(paths[0]).stem,'w':640,'h':360})
-        self.host.persist_session()
     def replace_media(self):
         l=self.selected()
         if l is None:
             self.host.status.setText('請先選擇格子，或按 2×2 建立格子');return
-        choices=[(g,i,f"{g+1}-{i+1}｜{group['name']} / {Path(item['path']).name}") for g,group in enumerate(self.host.lists) for i,item in enumerate(group['items'])]
+        choices=[(g,i,f"{g+1}-{i+1}｜{group['name']} / {media_name(item)}") for g,group in enumerate(self.host.lists) for i,item in enumerate(group['items'])]
         if not choices:self.host.status.setText('請先將檔案加入左側播放列表');return
         labels=[x[2] for x in choices]
         choice,ok=QInputDialog.getItem(self.host,'從播放列表選擇','此格要播放的檔案',labels,0,False)
@@ -332,12 +339,9 @@ class Compositor(QDockWidget):
         self.assign_items(l,[self.host.lists[g]['items'][i]])
     def assign_items(self,l,items):
         if not items:return
-        selected_group=self.host.group_index();selected_row=self.host.files.currentRow()
-        l.stop();group=len(self.host.lists);name=Path(items[0]['path']).stem
-        self.host.lists.append({'name':name,'items':deepcopy(items)})
-        l.c.update(kind='playlist',group=group,name=name,fit=True)
+        l.stop();name=media_name(items[0])
+        l.c.update(kind='playlist',name=name,fit=True,items=deepcopy(items));l.c.pop('cue_index',None);l.c.pop('cue_position',None)
         l.label.setText(name);l.resize_to(l.c['w'],l.c['h'])
-        self.host.refresh_groups(selected_group);self.host.files.setCurrentRow(selected_row)
         self.refresh();self.list.setCurrentRow(self.layers.index(l));self.sync_controls()
         self.enable.setChecked(True);l.start();self.host.persist_session()
     def assign_media(self,l,paths):
@@ -383,10 +387,8 @@ class Compositor(QDockWidget):
             QMessageBox.information(self.host,'格子數不足','請先移除多餘畫面，再選擇此排列。');return
         self.enable.setChecked(True)
         while len(self.layers)<cols*rows:
-            group=len(self.host.lists);name=f'畫面 {len(self.layers)+1}（雙擊選檔）'
-            self.host.lists.append({'name':name,'items':[]})
-            self.add({'kind':'playlist','group':group,'name':name,'fit':True})
-        self.host.refresh_groups()
+            name=f'畫面 {len(self.layers)+1}（雙擊選檔）'
+            self.add({'kind':'playlist','group':0,'items':[],'name':name,'fit':True})
         for i,l in enumerate(self.layers):
             l.c['fit']=True
             l.resize_to(self.width_px/cols,self.height_px/rows);l.setPos((i%cols)*self.width_px/cols,(i//cols)*self.height_px/rows)
@@ -414,17 +416,54 @@ class Compositor(QDockWidget):
         for l in self.layers:l.dispose();self.host.screen.scene().removeItem(l)
         self.layers=[];self.refresh()
         for c in layout:self.add(c)
+    def capture_cue(self,name):
+        if self.host.pending or self.host.transition or any(l.pending or l.transition for l in self.layers):
+            raise ValueError('請等待媒體載入或轉場完成後再記錄 CUE。')
+        if not self.enabled and self.host.current is None:raise ValueError('請先播放要記憶的影像再記錄 CUE。')
+        layout=self.snapshot()
+        for c,l in zip(layout,self.layers):
+            if c['kind']=='playlist':
+                c['items']=deepcopy(l.source_items());c['cue_index']=l.current[1] if l.current else 0
+                c['cue_position']=l.decks[l.active].player.position() if l.current and not is_still(l.decks[l.active].config) else 0
+        single=None
+        if not self.enabled and self.host.current is not None:
+            d=self.host.decks[self.host.active]
+            single={'media':deepcopy(self.host.current_item()),'position':d.player.position() if not is_still(d.config) else 0}
+        return {'name':name,'cue_version':1,'layout':layout,'settings':self.host.settings(),'single':single}
     def remember(self):
-        name,ok=QInputDialog.getText(self.host,'場景記憶','場景名稱')
-        if ok and name.strip():self.scenes.append({'name':name.strip(),'layout':self.snapshot(),'settings':self.host.settings()});self.refresh_scenes();self.scene_list.setCurrentIndex(len(self.scenes)-1);self.host.persist_session()
-    def refresh_scenes(self):self.scene_list.clear();self.scene_list.addItems([s['name'] for s in self.scenes])
+        name,ok=QInputDialog.getText(self.host,'記錄 CUE','段落／場景名稱')
+        if ok and name.strip():
+            try:cue=self.capture_cue(name.strip())
+            except ValueError as e:self.host.status.setText(str(e));return
+            self.scenes.append(cue);self.refresh_scenes();self.scene_list.setCurrentIndex(len(self.scenes)-1);self.host.persist_session()
+    def refresh_scenes(self):self.scene_list.clear();self.scene_list.addItems([f"CUE {i+1:02d} · {s['name']}" for i,s in enumerate(self.scenes)])
     def recall(self):
         i=self.scene_list.currentIndex()
         if i<0:return
-        s=self.scenes[i];self.stop();self.host.apply_settings(s.get('settings',{}));self.enable.setChecked(True);self.restore(s['layout']);self.host.status.setText('場景已載入；按播放啟動。')
+        s=deepcopy(self.scenes[i]);settings=s.get('settings',{});multi=bool(settings.get('multi',True))
+        # Check every stored source before interrupting the current show.
+        from model import media_walk
+        missing=[]
+        media_walk(s['layout'] if multi else s.get('single'),lambda item:missing.append(media_name(item)) if item.get('kind')!='black' and not Path(item['path']).is_file() else None)
+        if missing:self.host.status.setText('CUE 媒體遺失，保留目前畫面：'+', '.join(missing));return
+        self.host.stop();self.host.apply_settings(settings);self.enable.setChecked(multi);self.restore(s['layout'])
+        if multi:
+            for l in self.layers:l.start()
+        elif s.get('single'):
+            item=deepcopy(s['single']['media']);item['_resume_ms']=s['single'].get('position',0);self.host.request((0,0),item_override=item)
+        else:
+            self.host.status.setText('舊場景沒有保存單畫面來源，請重新記錄 CUE。');return
+        self.host.status.setText(f"CUE {i+1:02d} GO · {s['name']}")
+    def next_cue(self):
+        i=self.scene_list.currentIndex()+1
+        if i>=len(self.scenes):self.host.status.setText('已到最後一個 CUE');return
+        self.scene_list.setCurrentIndex(i);self.recall()
     def overwrite(self):
         i=self.scene_list.currentIndex()
-        if i>=0:self.scenes[i].update(layout=self.snapshot(),settings=self.host.settings());self.host.persist_session()
+        if i>=0:
+            try:self.scenes[i]=self.capture_cue(self.scenes[i]['name'])
+            except ValueError as e:self.host.status.setText(str(e));return
+            self.host.persist_session()
     def rename_scene(self):
         i=self.scene_list.currentIndex()
         if i<0:return

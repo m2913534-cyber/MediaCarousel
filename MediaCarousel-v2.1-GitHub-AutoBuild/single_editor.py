@@ -37,7 +37,7 @@ class SingleEditor(QGraphicsRectItem):
         h=self.host
         if h.current is None or h.pending or h.transition or h.compositor.enabled:return
         c={'single_x':max(-4,min(4,x)),'single_y':max(-4,min(4,y)),'single_zoom':max(.05,min(8,zoom))}
-        h.decks[h.active].config.update(c);p,i=h.current;h.lists[p]['items'][i].update(c)
+        h.decks[h.active].config.update(c);h.current_item().update(c)
         h.decks[h.active].apply_transform();self.sync()
     def mousePressEvent(self,event):self.origin=event.scenePos();self.initial=self.values();event.accept()
     def mouseMoveEvent(self,event):

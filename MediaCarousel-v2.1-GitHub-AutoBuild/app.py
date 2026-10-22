@@ -1,4 +1,5 @@
 import os, sys, time, random, json
+from copy import deepcopy
 os.environ.setdefault('QT_MEDIA_BACKEND','ffmpeg')
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QUrl, QSizeF, QRectF, QStandardPaths
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds
+from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name
 
 class Screen(QGraphicsView):
     def __init__(self):
@@ -39,7 +40,9 @@ class Deck:
     def __init__(self,screen):
         self.screen=screen;self.root=QGraphicsRectItem(screen.canvas_root);self.root.setPen(QPen(Qt.NoPen));self.last_frame=None;self.video=QGraphicsVideoItem(self.root); self.video.setSize(QSizeF(1920,1080))
         self.image=QGraphicsPixmapItem(self.root)
-        self.audio=QAudioOutput(); self.player=QMediaPlayer(); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
+        self.audio=QAudioOutput(); self.player=QMediaPlayer();
+        from audio_meter import AudioProbe
+        self.probe=AudioProbe(self.player); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
         self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
         self.item=self.image; self.kind='image'; self.config={}; self.clip_loaded=False; self.clear()
     def remember_frame(self,frame):
@@ -53,7 +56,9 @@ class Deck:
         self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
     def load(self,path,fit,config=None):
         self.clear(); self.path=path; self.config=dict(config or {}); self.clip_loaded=False
-        if Path(path).suffix.lower() in IMAGE_EXT:
+        if self.config.get('kind')=='black':
+            self.kind='image';self.item=self.image;pix=QPixmap(2,2);pix.fill(Qt.black);self.image.setPixmap(pix)
+        elif Path(path).suffix.lower() in IMAGE_EXT:
             reader=QImageReader(path); reader.setAutoTransform(True); image=reader.read()
             if image.isNull(): raise ValueError('無法讀取圖片')
             self.kind='image'; self.item=self.image; self.image.setPixmap(QPixmap.fromImage(image))
@@ -83,8 +88,8 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.2.2｜影音輪播工作台'); self.resize(1320,820)
-        self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
+        super().__init__(); self.setWindowTitle('Media Carousel 2.3｜影音輪播工作台'); self.resize(1320,820)
+        self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
         for i,d in enumerate(self.decks):
@@ -100,7 +105,7 @@ class Window(QMainWindow):
         self.groups=QComboBox(); self.groups.currentIndexChanged.connect(self.render); panel.addWidget(self.groups)
         self.files=QListWidget();self.files.setContextMenuPolicy(Qt.CustomContextMenu);self.files.customContextMenuRequested.connect(self.media_menu); self.files.itemDoubleClicked.connect(lambda _:self.play_selected()); self.files.currentRowChanged.connect(self.selection); panel.addWidget(self.files,1)
         row=QHBoxLayout(); panel.addLayout(row)
-        self.button(row,'加入影片／圖片',self.add_files); self.button(row,'移除',self.remove)
+        self.button(row,'加入影片／圖片',self.add_files);self.button(row,'＋黑畫面',self.add_black); self.button(row,'移除',self.remove)
         row=QHBoxLayout(); panel.addLayout(row); self.button(row,'↑ 上移',lambda:self.move(-1)); self.button(row,'↓ 下移',lambda:self.move(1))
         row=QHBoxLayout(); panel.addLayout(row); row.addWidget(QLabel('所選圖片秒數'))
         self.seconds=QDoubleSpinBox(); self.seconds.setRange(.5,86400); self.seconds.setValue(5); self.seconds.setSuffix(' 秒'); self.seconds.valueChanged.connect(self.set_seconds); row.addWidget(self.seconds)
@@ -179,9 +184,9 @@ class Window(QMainWindow):
     def render(self,*_):
         self.files.clear()
         for item in self.lists[self.group_index()]['items']:
-            path=Path(item['path']); image=path.suffix.lower() in IMAGE_EXT
-            text=f"{'圖片' if image else '影片'}  {path.name}"+ (f"  / {item['seconds']:g} 秒" if image else '')
-            if not path.is_file(): text='⚠ 遺失  '+text
+            path=Path(item['path']); image=is_still(item)
+            text=f"{'黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (f"  / {item['seconds']:g} 秒" if image else '')
+            if item.get('kind')!='black' and not path.is_file(): text='⚠ 遺失  '+text
             self.files.addItem(text)
     def selection(self,row):
         items=self.lists[self.group_index()]['items']; self.seconds.blockSignals(True)
@@ -195,7 +200,7 @@ class Window(QMainWindow):
         if row<0:return
         self.files.setCurrentRow(row)
         item=self.lists[self.group_index()]['items'][row]
-        if Path(item['path']).suffix.lower() in IMAGE_EXT:return
+        if is_still(item):return
         from PySide6.QtWidgets import QMenu
         menu=QMenu(self);action=menu.addAction('編輯影片…')
         if menu.exec(self.files.viewport().mapToGlobal(pos))==action:self.open_video_editor(row)
@@ -223,7 +228,7 @@ class Window(QMainWindow):
         if 0<=row<len(items): items[row]['seconds']=value; self.render(); self.files.setCurrentRow(row)
     def apply_seconds(self):
         for item in self.lists[self.group_index()]['items']:
-            if Path(item['path']).suffix.lower() in IMAGE_EXT: item['seconds']=self.seconds.value()
+            if is_still(item): item['seconds']=self.seconds.value()
         self.render()
     def new_list(self):
         name,ok=QInputDialog.getText(self,'新增清單','清單名稱')
@@ -244,6 +249,9 @@ class Window(QMainWindow):
                 elif l.c['group']==index:l.c['group']=0
         if not self.lists:self.lists=[{'name':'播放清單 1','items':[]}]
         self.refresh_groups()
+    def add_black(self):
+        self.lists[self.group_index()]['items'].append({'kind':'black','path':'media:black','name':'黑畫面','seconds':self.seconds.value(),'start':0,'end':0,'gain':0,'mute':True})
+        self.render();self.files.setCurrentRow(len(self.lists[self.group_index()]['items'])-1);self.persist_session()
     def add_files(self,paths=None):
         if paths is None: paths,_=QFileDialog.getOpenFileNames(self,'加入影片或圖片','','所有檔案 (*)')
         for path in paths:
@@ -270,7 +278,7 @@ class Window(QMainWindow):
         self.status.setText('單畫面編輯：拖曳影像移動、右下角縮放；滾輪也可縮放。按一鍵滿版可重設。' if self.single_editor.enabled else '已關閉單畫面拖曳縮放')
     def toggle(self):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return
-        if self.held:self.request(self.current);return
+        if self.held:self.request(self.current,item_override=self.cue_item);return
         if self.current is None:self.play_selected();return
         self.running=not self.running
         for i,d in enumerate(self.decks):
@@ -281,11 +289,13 @@ class Window(QMainWindow):
         if hasattr(self,'compositor'):self.compositor.stop()
         self.stop_single()
     def stop_single(self):
-        self.held=False;self.running=False; self.pending=None; self.transition=None; self.current=None; self.elapsed=0
+        self.cue_item=None;self.held=False;self.running=False; self.pending=None; self.transition=None; self.current=None; self.elapsed=0
         for d in self.decks:d.clear()
         self.seek.setValue(0); self.status.setText('已停止')
         if hasattr(self,'single_editor'):self.single_editor.sync()
-    def request(self,target):
+    def current_item(self):
+        return self.cue_item if self.cue_item is not None else self.lists[self.current[0]]['items'][self.current[1]]
+    def request(self,target,item_override=None):
         if target is None:
             if self.hold_last.isChecked() and self.current is not None:
                 self.held=True;self.running=False;self.decks[self.active].freeze();self.status.setText('播放結束：停留最後一幀')
@@ -293,13 +303,14 @@ class Window(QMainWindow):
             return
         self.held=False
         p,i=target
-        if not (0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items'])):return
+        if item_override is None and not (0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items'])):return
         if self.pending or self.transition:return
-        self.current=target; self.groups.setCurrentIndex(p); self.files.setCurrentRow(i)
-        item=self.lists[p]['items'][i]; idx=1-self.active; self.running=True
+        self.current=target;self.cue_item=deepcopy(item_override) if item_override is not None else None
+        if item_override is None:self.groups.setCurrentIndex(p);self.files.setCurrentRow(i)
+        item=self.current_item(); idx=1-self.active; self.running=True
         self.pending={'index':idx,'started':time.monotonic()}; self.elapsed=0;self.single_editor.sync()
         try:
-            if not Path(item['path']).is_file():raise ValueError('找不到檔案')
+            if item.get('kind')!='black' and not Path(item['path']).is_file():raise ValueError('找不到檔案')
             self.decks[idx].load(item['path'],self.fit.currentIndex(),item)
             if self.decks[idx].kind=='image':self.begin_transition()
             else:self.decks[idx].player.play()
@@ -309,7 +320,7 @@ class Window(QMainWindow):
     def media_status(self,index,status):
         d=self.decks[index]
         if status==QMediaPlayer.LoadedMedia and not d.clip_loaded:
-            d.clip_loaded=True;QTimer.singleShot(0,lambda d=d:d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]))
+            d.clip_loaded=True;QTimer.singleShot(0,lambda d=d:d.player.setPosition(max(clip_bounds(d.config,d.player.duration())[0],min(d.config.pop('_resume_ms',0),max(0,clip_bounds(d.config,d.player.duration())[1]-1)))))
         if status==QMediaPlayer.EndOfMedia and index==self.active and not self.pending and not self.transition and self.running:self.advance()
     def media_error(self,index,message):
         if (self.pending and index==self.pending['index']) or (index==self.active and self.current):self.fail(message)
@@ -325,7 +336,7 @@ class Window(QMainWindow):
         if effect=='隨機效果':effect=random.choice(EFFECTS[:-1])
         self.decks[idx].root.setZValue(2);self.decks[self.active].root.setZValue(1);self.decks[idx].item.setZValue(2); self.decks[self.active].item.setZValue(1)
         self.transition={'new':idx,'old':self.active,'time':0.,'effect':effect}
-        self.elapsed=0; self.status.setText('播放中：'+Path(self.decks[idx].path).name)
+        self.elapsed=0; self.status.setText('播放中：'+media_name(self.decks[idx].config))
         if effect=='直接切換':self.update_transition(1)
     def update_transition(self,t):
         tr=self.transition
@@ -347,6 +358,9 @@ class Window(QMainWindow):
     def advance(self,reverse=False):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.advance(reverse);return
         if self.pending or self.transition:return
+        if self.cue_item is not None:
+            target=following([{'items':[self.cue_item]}],(0,0),self.mode.currentText(),reverse)
+            item=deepcopy(self.cue_item);item.pop('_resume_ms',None);self.request(target,item_override=item);return
         target=following(self.lists,self.current or (self.group_index(),-1),self.mode.currentText(),reverse)
         self.request(target)
     def tick(self):
@@ -358,7 +372,7 @@ class Window(QMainWindow):
         if self.transition:
             self.transition['time']+=dt; self.update_transition(min(1,self.transition['time']/self.duration.value()));return
         if self.current is None:return
-        d=self.decks[self.active]; item=self.lists[self.current[0]]['items'][self.current[1]]
+        d=self.decks[self.active]; item=self.current_item()
         d.audio.setVolume(self.volume.value()/100*self.deck_gain(d))
         if d.kind=='image':
             self.elapsed+=dt; fraction=self.elapsed/item['seconds']
@@ -372,14 +386,16 @@ class Window(QMainWindow):
             # Start overlap only near the end; short videos use their end-of-media event.
             remaining=end-d.player.position()
             if duration>self.duration.value()*2000 and 0<remaining<=self.duration.value()*1000 and self.effect.currentText()!='直接切換':
-                if following(self.lists,self.current,self.mode.currentText()) is not None:self.advance()
+                if self.cue_item is not None:
+                    if self.mode.currentText()!='播放一次':self.advance()
+                elif following(self.lists,self.current,self.mode.currentText()) is not None:self.advance()
         if not self.seek.isSliderDown():self.seek.setValue(int(min(1,fraction)*1000))
     def seek_to(self):
         if self.current is None or self.pending or self.transition:return
         d=self.decks[self.active]
         if d.kind=='video':
             start,end=clip_bounds(d.config,d.player.duration());d.player.setPosition(start+int((end-start)*self.seek.value()/1000))
-        else:self.elapsed=self.lists[self.current[0]]['items'][self.current[1]]['seconds']*self.seek.value()/1000
+        else:self.elapsed=self.current_item()['seconds']*self.seek.value()/1000
     def refresh_media_fit(self,*_):
         for d in self.decks:d.relayout(self.fit.currentIndex())
         if hasattr(self,'single_editor'):self.single_editor.sync()
