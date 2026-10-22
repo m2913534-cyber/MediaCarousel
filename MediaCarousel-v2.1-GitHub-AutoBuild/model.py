@@ -5,6 +5,10 @@ MODES = ['清單循環', '所有清單輪播', '單檔循環', '播放一次']
 EFFECTS = ['淡入淡出', '淡出至黑再淡入', '向左滑動', '向右滑動', '縮放淡入', '直接切換', '隨機效果']
 IMAGE_EXT = {'.jpg','.jpeg','.png','.bmp','.webp','.tif','.tiff','.gif'}
 MAX_LAYERS = 12
+PDF_EXT={'.pdf'}
+PPT_EXT={'.ppt','.pptx','.pps','.ppsx'}
+def is_pdf(item):return Path(item.get('path','')).suffix.lower() in PDF_EXT
+def is_powerpoint(item):return Path(item.get('path','')).suffix.lower() in PPT_EXT
 
 def is_still(item):return item.get('kind')=='black' or Path(item.get('path','')).suffix.lower() in IMAGE_EXT
 def media_name(item):return item.get('name','黑畫面') if item.get('kind')=='black' else Path(item.get('path','')).name
@@ -71,6 +75,9 @@ def load_project(path):
         if not isinstance(item['path'],str):raise ValueError('媒體路徑錯誤')
         if item.get('kind')!='black':item['path']=str((Path(path).parent/item['path']).resolve())
         item['seconds']=number(item.get('seconds',5),5,.5,86400)
+        if is_pdf(item):item['pdf_page']=int(number(item.get('pdf_page',0),0,0,1000000))
+        if is_powerpoint(item):
+            item['ppt_slide']=int(number(item.get('ppt_slide',1),1,1,1000000));item['ppt_click']=int(number(item.get('ppt_click',0),0,0,1000000))
         item['start']=number(item.get('start',0),0,0,86400);item['end']=number(item.get('end',0),0,0,86400)
         if item['end'] and item['end']<=item['start']:raise ValueError('片段終點必須大於起點')
         item['gain']=number(item.get('gain',100),100,0,100);item['mute']=bool(item.get('mute',False))

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name
+from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint
 
 class Screen(QGraphicsView):
     def __init__(self):
@@ -44,7 +44,11 @@ class Deck:
         from audio_meter import AudioProbe
         self.probe=AudioProbe(self.player); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
         self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
+        from pdf_source import PdfSource
+        self.pdf_source=PdfSource();self.pdf_source.ready.connect(self.pdf_ready)
         self.item=self.image; self.kind='image'; self.config={}; self.clip_loaded=False; self.clear()
+    def pdf_ready(self,image,page,count):
+        self.image.setPixmap(QPixmap.fromImage(image));self.config['pdf_page']=page;self.relayout(self.fit_mode)
     def remember_frame(self,frame):
         if frame.isValid():self.last_frame=frame
     def freeze(self):
@@ -53,10 +57,12 @@ class Deck:
             self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setPos(self.video.pos());self.image.setZValue(self.video.zValue())
             self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.fit_mode);self.image.setOpacity(1);self.image.show()
     def clear(self):
-        self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
+        self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
     def load(self,path,fit,config=None):
         self.clear(); self.path=path; self.config=dict(config or {}); self.clip_loaded=False
-        if self.config.get('kind')=='black':
+        if is_pdf(self.config):
+            self.kind='pdf';self.item=self.image;self.fit_mode=int(fit);self.pdf_source.load(path,self.config.get('pdf_page',0),self.screen.sceneRect().size().toSize())
+        elif self.config.get('kind')=='black':
             self.kind='image';self.item=self.image;pix=QPixmap(2,2);pix.fill(Qt.black);self.image.setPixmap(pix)
         elif Path(path).suffix.lower() in IMAGE_EXT:
             reader=QImageReader(path); reader.setAutoTransform(True); image=reader.read()
@@ -77,8 +83,8 @@ class Deck:
     def relayout(self,fit):
         self.fit_mode=int(fit);self.item.setTransformOriginPoint(0,0);cw,ch=self.screen.sceneRect().width(),self.screen.sceneRect().height()
         self.image.setTransform(QTransform());self.image.setScale(1)
-        if self.kind=='image' and not self.image.pixmap().isNull():
-            w,h=self.image.pixmap().width(),self.image.pixmap().height()
+        if self.kind in ('image','pdf') and not self.image.pixmap().isNull():
+            w,h=self.image.boundingRect().width(),self.image.boundingRect().height()
             if fit==2:self.image.setTransform(QTransform.fromScale(cw/w,ch/h));self.image.setPos(0,0)
             else:
                 scale=(max if fit else min)(cw/w,ch/h);self.image.setScale(scale);self.image.setPos((cw-w*scale)/2,(ch-h*scale)/2)
@@ -88,11 +94,13 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.4.1｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.5｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
         for i,d in enumerate(self.decks):
+            d.pdf_source.ready.connect(lambda image,page,total,i=i:self.document_ready(i,page,total))
+            d.pdf_source.failed.connect(lambda message,i=i:self.media_error(i,message))
             d.player.mediaStatusChanged.connect(lambda s,i=i:self.media_status(i,s))
             d.player.errorOccurred.connect(lambda e,m,i=i:self.media_error(i,m))
             d.video.videoSink().videoFrameChanged.connect(lambda f,i=i:self.first_frame(i,f))
@@ -104,6 +112,8 @@ class Window(QMainWindow):
         self.single_editor=SingleEditor(self)
         self.output_view=Screen();self.output_view.viewport().setProperty('clean_output',True);self.output_view.setInteractive(False);self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
         self.preview_view=Screen();self.preview_view.viewport().setProperty('clean_output',True);self.preview_view.setInteractive(False);self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
+        from presentations import PresentationController
+        self.presentations=PresentationController(self)
         self.timer=QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(16); self.last=time.monotonic()
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self,activated=fn)
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self.output_view,activated=fn)
@@ -141,7 +151,7 @@ class Window(QMainWindow):
         self.files.clear()
         for item in self.lists[self.group_index()]['items']:
             path=Path(item['path']); image=is_still(item)
-            text=f"{'黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (f"  / {item['seconds']:g} 秒" if image else '')
+            text=f"{'PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (f"  / {item['seconds']:g} 秒" if image else '')
             if item.get('kind')!='black' and not path.is_file(): text='⚠ 遺失  '+text
             self.files.addItem(text)
     def selection(self,row):
@@ -156,6 +166,11 @@ class Window(QMainWindow):
         if row<0:return
         self.files.setCurrentRow(row)
         item=self.lists[self.group_index()]['items'][row]
+        if is_pdf(item) or is_powerpoint(item):
+            from PySide6.QtWidgets import QMenu
+            menu=QMenu(self);play=menu.addAction('播放 PDF' if is_pdf(item) else 'PowerPoint 原生放映')
+            if menu.exec(self.files.viewport().mapToGlobal(pos))==play:self.play_selected()
+            return
         if is_still(item):return
         from PySide6.QtWidgets import QMenu
         menu=QMenu(self);action=menu.addAction('編輯影片…')
@@ -192,7 +207,7 @@ class Window(QMainWindow):
         if 0<=row<len(items): items[row]['seconds']=value; self.render(); self.files.setCurrentRow(row)
     def apply_seconds(self):
         for item in self.lists[self.group_index()]['items']:
-            if is_still(item): item['seconds']=self.seconds.value()
+            if is_still(item) or is_pdf(item): item['seconds']=self.seconds.value()
         self.render()
     def new_list(self):
         name,ok=QInputDialog.getText(self,'新增清單','清單名稱')
@@ -217,7 +232,7 @@ class Window(QMainWindow):
         self.lists[self.group_index()]['items'].append({'kind':'black','path':'media:black','name':'黑畫面','seconds':self.seconds.value(),'start':0,'end':0,'gain':0,'mute':True})
         self.render();self.files.setCurrentRow(len(self.lists[self.group_index()]['items'])-1);self.persist_session()
     def add_files(self,paths=None):
-        if paths is None: paths,_=QFileDialog.getOpenFileNames(self,'加入影片或圖片','','所有檔案 (*)')
+        if paths is None: paths,_=QFileDialog.getOpenFileNames(self,'加入影片、圖片或簡報','','媒體與簡報 (*.pdf *.ppt *.pptx *.pps *.ppsx *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mp3 *.wav *.jpg *.jpeg *.png *.webp *.bmp *.gif *.tif *.tiff);;所有檔案 (*)')
         for path in paths:
             if Path(path).is_file(): self.lists[self.group_index()]['items'].append({'path':str(Path(path).resolve()),'seconds':self.seconds.value()})
         self.render()
@@ -231,6 +246,7 @@ class Window(QMainWindow):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.use_selected_file();return
         self.failed.clear(); row=max(0,self.files.currentRow()); self.request((self.group_index(),row))
     def free_transform(self):
+        if self.presentations.active:self.status.setText('PowerPoint 以原生簡報比例獨立放映；PDF 可在畫布拖曳縮放。');return
         if self.compositor.enabled:
             self.status.setText('自由影像縮放僅用於單畫面；多畫面請拖曳格子，內容會保持填滿。');return
         self.single_editor.enabled=not self.single_editor.enabled
@@ -241,6 +257,7 @@ class Window(QMainWindow):
         self.single_editor.sync()
         self.status.setText('單畫面編輯：拖曳影像移動、右下角縮放；滾輪也可縮放。按一鍵滿版可重設。' if self.single_editor.enabled else '已關閉單畫面拖曳縮放')
     def toggle(self):
+        if self.presentations.active:self.presentations.command('pause');return
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return
         if self.held:self.request(self.current,item_override=self.cue_item);return
         if self.current is None:self.play_selected();return
@@ -250,6 +267,7 @@ class Window(QMainWindow):
                 d.player.play() if self.running else d.player.pause()
         self.status.setText('播放中' if self.running else '已暫停')
     def stop(self):
+        if hasattr(self,'presentations'):self.presentations.stop()
         if hasattr(self,'compositor'):self.compositor.stop()
         self.stop_single()
     def stop_single(self):
@@ -265,8 +283,12 @@ class Window(QMainWindow):
                 self.held=True;self.running=False;self.decks[self.active].freeze();self.status.setText('播放結束：停留最後一幀')
             else:self.stop()
             return
-        self.held=False
         p,i=target
+        candidate=item_override if item_override is not None else (self.lists[p]['items'][i] if 0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items']) else None)
+        if candidate is not None and is_powerpoint(candidate):
+            self.presentations.start_native(target,candidate,item_override is not None);return
+        if self.presentations.active or self.presentations.starting:self.presentations.stop()
+        self.held=False
         if item_override is None and not (0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items'])):return
         if self.pending or self.transition:return
         self.current=target;self.cue_item=deepcopy(item_override) if item_override is not None else None
@@ -277,8 +299,13 @@ class Window(QMainWindow):
             if item.get('kind')!='black' and not Path(item['path']).is_file():raise ValueError('找不到檔案')
             self.decks[idx].load(item['path'],self.fit.currentIndex(),item)
             if self.decks[idx].kind=='image':self.begin_transition()
-            else:self.decks[idx].player.play()
+            elif self.decks[idx].kind=='video':self.decks[idx].player.play()
         except Exception as e:self.fail(str(e))
+    def document_ready(self,index,page,total):
+        if self.pending and index==self.pending['index']:self.begin_transition()
+        elif index==self.active and self.current is not None:
+            self.current_item()['pdf_page']=page;self.elapsed=0
+        if index==self.active and self.current is not None:self.current_item()['pdf_page']=page
     def first_frame(self,index,frame):
         if frame.isValid() and self.pending and index==self.pending['index']:QTimer.singleShot(0,self.begin_transition)
     def media_status(self,index,status):
@@ -320,6 +347,12 @@ class Window(QMainWindow):
             self.active=tr['new']; self.transition=None;self.single_editor.sync()
     def deck_gain(self,d):return 0 if d.config.get('mute') else d.config.get('gain',100)/100
     def advance(self,reverse=False):
+        if self.presentations.active:self.presentations.command('previous' if reverse else 'next');return
+        if not self.compositor.enabled and self.current is not None and not self.pending and not self.transition:
+            d=self.decks[self.active]
+            if d.kind=='pdf' and d.pdf_source.step(reverse):self.elapsed=0;return
+        self.advance_media(reverse)
+    def advance_media(self,reverse=False):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.advance(reverse);return
         if self.pending or self.transition:return
         if self.cue_item is not None:
@@ -329,6 +362,7 @@ class Window(QMainWindow):
         self.request(target)
     def tick(self):
         now=time.monotonic(); dt=min(now-self.last,.25); self.last=now
+        if self.presentations.active:return
         if not self.running:return
         if self.pending:
             if now-self.pending['started']>20:self.fail('解碼逾時（20 秒）')
@@ -338,6 +372,11 @@ class Window(QMainWindow):
         if self.current is None:return
         d=self.decks[self.active]; item=self.current_item()
         d.audio.setVolume(self.volume.value()/100*self.deck_gain(d))
+        if d.kind=='pdf':
+            if self.pdf_auto.isChecked() and not d.pdf_source.loading:
+                self.elapsed+=dt
+                if self.elapsed>=item['seconds']:self.elapsed=0;self.advance()
+            return
         if d.kind=='image':
             self.elapsed+=dt; fraction=self.elapsed/item['seconds']
             if fraction>=1:self.advance()
@@ -357,7 +396,8 @@ class Window(QMainWindow):
     def seek_to(self):
         if self.current is None or self.pending or self.transition:return
         d=self.decks[self.active]
-        if d.kind=='video':
+        if d.kind=='pdf':d.pdf_source.set_page(round((d.pdf_source.count-1)*self.seek.value()/1000))
+        elif d.kind=='video':
             start,end=clip_bounds(d.config,d.player.duration());d.player.setPosition(start+int((end-start)*self.seek.value()/1000))
         else:self.elapsed=self.current_item()['seconds']*self.seek.value()/1000
     def refresh_media_fit(self,*_):
@@ -367,12 +407,15 @@ class Window(QMainWindow):
         if hasattr(self,'output_view'):
             self.output_view.fit_mode=[1,0,2][self.output_fit.currentIndex()];self.output_view.refit()
     def fill_output(self):
+        if self.presentations.active:
+            screen=self.output_view.screen();self.presentations.move_output(screen,QApplication.screens().index(screen));return
         if self.compositor.enabled:self.compositor.full_bleed()
         else:
             if self.current is not None:self.single_editor.apply(0,0,1)
             self.fit.setCurrentIndex(2);self.refresh_media_fit();self.persist_session()
         self.output_fit.setCurrentIndex(1);self.refresh_output_fit()
     def output(self):
+        if self.presentations.active:self.presentations.command('focus');return
         if self.output_view.isFullScreen():self.output_view.showNormal()
         else:self.output_view.showFullScreen()
         QTimer.singleShot(0,self.output_view.refit)
@@ -380,8 +423,10 @@ class Window(QMainWindow):
         screens=QApplication.screens();labels=[f'{i+1}. {s.name()} / {round(s.size().width()*s.devicePixelRatio())}×{round(s.size().height()*s.devicePixelRatio())} 像素（縮放 {s.devicePixelRatio():g}×）' for i,s in enumerate(screens)]
         label,ok=QInputDialog.getItem(self,'選擇輸出螢幕','螢幕',labels,0,False)
         if ok:
-            screen=screens[labels.index(label)];self.output_view.showNormal();self.output_view.winId();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
-    def settings(self):return {'canvas_width':int(self.screen.sceneRect().width()),'canvas_height':int(self.screen.sceneRect().height()),'hold_last':self.hold_last.isChecked(),'performance':self.compositor.performance.isChecked(),'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
+            screen=screens[labels.index(label)]
+            if self.presentations.active:self.presentations.move_output(screen,labels.index(label));return
+            self.output_view.showNormal();self.output_view.winId();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
+    def settings(self):return {'canvas_width':int(self.screen.sceneRect().width()),'canvas_height':int(self.screen.sceneRect().height()),'ppt_timings':hasattr(self,'presentations') and self.presentations.timings.isChecked(),'pdf_auto':self.pdf_auto.isChecked(),'hold_last':self.hold_last.isChecked(),'performance':self.compositor.performance.isChecked(),'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
     def save(self):
         path,_=QFileDialog.getSaveFileName(self,'儲存輪播專案','','輪播專案 (*.mcarousel)')
         if path:
@@ -419,6 +464,8 @@ class Window(QMainWindow):
             self.compositor.controls[key].blockSignals(True);self.compositor.controls[key].setMaximum(high);self.compositor.controls[key].blockSignals(False)
         self.refresh_media_fit();self.compositor.sync_controls()
     def apply_settings(self,s):
+        self.pdf_auto.setChecked(s.get('pdf_auto',False))
+        if hasattr(self,'presentations'):self.presentations.timings.setChecked(s.get('ppt_timings',False))
         self.set_canvas(s.get('canvas_width',1920),s.get('canvas_height',1080));self.hold_last.setChecked(s.get('hold_last',True));self.compositor.performance.setChecked(s.get('performance',True))
         self.mode.setCurrentText(s.get('mode',MODES[0]));self.effect.setCurrentText(s.get('effect',EFFECTS[0]));self.duration.setValue(float(s.get('duration',1)));self.volume.setValue(int(s.get('volume',80)));self.fit.setCurrentIndex(int(s.get('fit',0)));self.output_fit.setCurrentIndex(int(s.get('output_fit',0)))
     def formats(self):
@@ -428,6 +475,8 @@ class Window(QMainWindow):
         if e.mimeData().hasUrls():e.acceptProposedAction()
     def dropEvent(self,e):self.add_files([u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()])
     def closeEvent(self,e):
+        if hasattr(self,'presentations') and not self.presentations.shutdown():
+            self.status.setText('PowerPoint 正在結束放映，請稍候再關閉。');e.ignore();return
         for editor in list(getattr(self,'video_editors',{}).values()):editor.close()
         self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();super().closeEvent(e)
 
@@ -438,8 +487,17 @@ if __name__=='__main__':
         report=Path(sys.argv[sys.argv.index('--build-smoke-test')+1])
         def finish_smoke():
             codecs=QMediaFormat().supportedVideoCodecs(QMediaFormat.Decode)
-            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs)
-            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs)}),encoding='utf-8')
+            from PySide6.QtGui import QPdfWriter,QColor
+            from PySide6.QtCore import QSize
+            from PySide6.QtPdf import QPdfDocument
+            pdfpath=report.with_suffix('.pdf');writer=QPdfWriter(str(pdfpath));painter=QPainter(writer);painter.fillRect(0,0,writer.width(),writer.height(),QColor('green'));painter.end();del writer
+            pdf=QPdfDocument();error=pdf.load(str(pdfpath));pdf_ok=error==QPdfDocument.Error.None_ and not pdf.render(0,QSize(80,80)).isNull();pdf.close();pdfpath.unlink(missing_ok=True)
+            bridge_ok=True
+            if sys.platform=='win32':
+                try:import pythoncom,win32com.client
+                except Exception:bridge_ok=False
+            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok
+            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok}),encoding='utf-8')
             window.close();app.exit(0 if ok else 1)
         QTimer.singleShot(1500,finish_smoke)
     sys.exit(app.exec())

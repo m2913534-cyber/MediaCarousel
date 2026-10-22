@@ -74,18 +74,18 @@ class Interface:
         self.asset_detail_toggle=QToolButton();self.asset_detail_toggle.setText('▸ 素材參數');self.asset_detail_toggle.setCheckable(True);self.asset_detail_toggle.setToolButtonStyle(Qt.ToolButtonTextOnly);v.addWidget(self.asset_detail_toggle)
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setMaximumHeight(310);scroll.setVisible(False);details,dv=panel();scroll.setWidget(details);v.addWidget(scroll)
         self.asset_detail_toggle.toggled.connect(scroll.setVisible)
-        form=QFormLayout();dv.addLayout(form);h.seconds=QDoubleSpinBox();h.seconds.setRange(.5,86400);h.seconds.setValue(5);h.seconds.setSuffix(' 秒');h.seconds.valueChanged.connect(h.set_seconds);form.addRow('圖片／黑場',h.seconds)
+        form=QFormLayout();dv.addLayout(form);h.seconds=QDoubleSpinBox();h.seconds.setRange(.5,86400);h.seconds.setValue(5);h.seconds.setSuffix(' 秒');h.seconds.valueChanged.connect(h.set_seconds);form.addRow('圖片／PDF／黑場',h.seconds)
         h.clip_start=QDoubleSpinBox();h.clip_end=QDoubleSpinBox()
         for label,spin in [('開始秒',h.clip_start),('結束秒 · 0＝片尾',h.clip_end)]:spin.setRange(0,86400);spin.setDecimals(2);form.addRow(label,spin)
         h.clip_gain=QDoubleSpinBox();h.clip_gain.setRange(0,100);h.clip_gain.setValue(100);h.clip_gain.setSuffix(' %');form.addRow('素材音量',h.clip_gain)
         from PySide6.QtWidgets import QCheckBox
-        h.clip_mute=QCheckBox('素材靜音');dv.addWidget(h.clip_mute);button(dv,'套用片段與音量',h.edit_clip);button(dv,'套用圖片秒數到本清單',h.apply_seconds)
+        h.clip_mute=QCheckBox('素材靜音');dv.addWidget(h.clip_mute);button(dv,'套用片段與音量',h.edit_clip);button(dv,'套用圖片／PDF 秒數到本清單',h.apply_seconds)
         tip=QLabel('影片可按右鍵開啟獨立編輯視窗。');tip.setWordWrap(True);tip.setObjectName('SecondaryLabel');dv.addWidget(tip)
         self.asset_dock=self.dock('AssetDock','素材庫',w,Qt.LeftDockWidgetArea)
     def build_viewer(self):
         h=self.host;root=QWidget();root.setObjectName('ProgramPanel');h.setCentralWidget(root);v=QVBoxLayout(root);v.setContentsMargins(14,12,14,8);v.setSpacing(9)
         r=row(v);self.program_label=QLabel('PROGRAM · 輸出預覽');self.program_label.setObjectName('PanelHeading');r.addWidget(self.program_label);r.addStretch();self.canvas_label=QLabel('1920 × 1080');self.canvas_label.setObjectName('SecondaryLabel');r.addWidget(self.canvas_label)
-        v.addWidget(h.screen,1);h.screen.setMinimumSize(180,100)
+        self.viewer_layout=v;v.addWidget(h.screen,1);h.screen.setMinimumSize(180,100)
         r=row(v);self.source_label=QLabel('尚未播放');self.source_label.setObjectName('SecondaryLabel');r.addWidget(self.source_label,1);self.time_label=QLabel('00:00 / 00:00');self.time_label.setObjectName('TimeLabel');r.addWidget(self.time_label)
         h.seek=QSlider(Qt.Horizontal);h.seek.setRange(0,1000);h.seek.sliderReleased.connect(h.seek_to);v.addWidget(h.seek)
         r=row(v);button(r,'⏮',lambda:h.advance(True));h.play_btn=button(r,'▶ 播放／暫停',h.toggle,'PrimaryButton');button(r,'■ 停止',h.stop,'StopButton');button(r,'⏭',h.advance);r.addStretch()
@@ -100,6 +100,7 @@ class Interface:
         h.effect=QComboBox();h.effect.addItems(EFFECTS);form.addRow('切換效果',h.effect)
         h.duration=QDoubleSpinBox();h.duration.setRange(.1,10);h.duration.setValue(1);h.duration.setSuffix(' 秒');form.addRow('轉場時間',h.duration)
         from PySide6.QtWidgets import QCheckBox
+        h.pdf_auto=QCheckBox('PDF 每頁自動輪播（依素材秒數）');v.addWidget(h.pdf_auto)
         h.hold_last=QCheckBox('播放一次結束時停留最後一幀');h.hold_last.setChecked(True);v.addWidget(h.hold_last)
         h.fit=QComboBox();h.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）','強制滿版（拉伸至畫布）']);h.fit.currentIndexChanged.connect(h.refresh_media_fit);form.addRow('單畫面填滿',h.fit)
         h.output_fit=QComboBox();h.output_fit.addItems(['滿螢幕（等比例裁切）','完整畫布（保留黑邊）','延展至螢幕（可能變形）']);h.output_fit.currentIndexChanged.connect(h.refresh_output_fit);form.addRow('投影比例',h.output_fit)
@@ -216,6 +217,8 @@ class Interface:
     def refresh_info(self):
         h=self.host;r=h.screen.sceneRect();self.canvas_label.setText(f'{int(r.width())} × {int(r.height())}')
         if not hasattr(h,'compositor'):return
+        if hasattr(h,'presentations') and h.presentations.active:
+            state=h.presentations.native_state;self.source_label.setText('PowerPoint · '+media_name(h.current_item()));self.time_label.setText(f"投影片 {state.get('slide',1)} / {state.get('total',1)} · 動畫 {state.get('click',0)}");return
         if h.compositor.enabled:
             l=h.compositor.selected()
             d=l.decks[l.active] if l and l.c['kind']=='playlist' else None
@@ -223,6 +226,8 @@ class Interface:
         else:
             d=h.decks[h.active] if h.current is not None else None
             self.source_label.setText(media_name(d.config) if d and d.config else '尚未播放')
+        if d and d.kind=='pdf':
+            self.time_label.setText(f'PDF 第 {d.pdf_source.page+1} / {d.pdf_source.count} 頁');return
         if d:
             current=d.player.position() if d.kind=='video' else int((l.elapsed if h.compositor.enabled and l else h.elapsed)*1000)
             total=d.player.duration() if d.kind=='video' else int(d.config.get('seconds',5)*1000)

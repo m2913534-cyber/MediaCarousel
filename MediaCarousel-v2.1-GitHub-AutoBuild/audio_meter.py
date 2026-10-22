@@ -55,6 +55,8 @@ class AudioMeter(QWidget):
         deck=None
         if layer is not None and layer.c['kind']=='playlist':deck=layer.decks[layer.transition[0] if layer.transition else layer.active]
         elif not h.compositor.enabled:deck=h.decks[h.transition['new'] if h.transition else h.active]
+        external=hasattr(h,'presentations') and h.presentations.active
+        if external:deck=None
         probe=deck.probe if deck else None
         if self.probe is not probe:
             if self.probe:self.probe.enabled=False
@@ -62,6 +64,7 @@ class AudioMeter(QWidget):
             if probe:probe.enabled=True
         has_audio=bool(deck and deck.kind=='video' and deck.player.hasAudio())
         self.label=('選取格子' if layer else '單畫面')+' · L/R · POST FADER' if has_audio else '目前來源無音訊'
+        if external:self.label='PowerPoint 原生音訊 · 系統音量'
         active=has_audio and deck.player.playbackState()==QMediaPlayer.PlayingState and now-probe.when<.3
         gain=deck.audio.volume() if active and not deck.audio.isMuted() else 0
         for i in range(2):

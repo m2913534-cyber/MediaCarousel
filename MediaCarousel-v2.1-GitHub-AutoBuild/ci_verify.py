@@ -1,4 +1,4 @@
-"""Verify the bundled app starts, then package the complete distribution."""
+"""Verify the bundled app starts and includes PDF/PowerPoint runtime dependencies."""
 import json
 import platform
 import subprocess
@@ -19,6 +19,6 @@ with tempfile.TemporaryDirectory() as temp:
     report=Path(temp)/'startup.json'
     subprocess.run([str(executable),'--build-smoke-test',str(report)],cwd=temp,check=True,timeout=90)
     result=json.loads(report.read_text(encoding='utf-8'))
-    if not result.get('ok'):
+    if not all(result.get(key) for key in ('ok','pdf','powerpoint_bridge')):
         raise SystemExit(f'Startup check failed: {result}')
-print('PASS: bundled app startup and decoder enumeration',platform.system(),platform.machine())
+print('PASS: bundled app startup, decoder enumeration, PDF render and PowerPoint bridge',platform.system(),platform.machine(),result)

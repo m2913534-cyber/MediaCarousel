@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTe
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name
+from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name,is_pdf,is_powerpoint
 
 def clean_view(widget):
     return widget is not None and bool(widget.property('clean_output'))
@@ -38,6 +38,8 @@ class MediaDeck:
     def __init__(self,layer):
         self.layer=layer;self.video=QGraphicsVideoItem(layer);
         from PySide6.QtWidgets import QGraphicsPixmapItem
+        from pdf_source import PdfSource
+        self.pdf_source=PdfSource();self.pdf_source.ready.connect(self.pdf_ready);self.pdf_source.failed.connect(layer.error)
         self.image=QGraphicsPixmapItem(layer);self.image.setTransformationMode(Qt.SmoothTransformation)
         self.player=QMediaPlayer();
         from audio_meter import AudioProbe
@@ -47,8 +49,12 @@ class MediaDeck:
         self.player.errorOccurred.connect(lambda e,m:layer.error(m))
         self.video.videoSink().videoFrameChanged.connect(self.frame)
         self.clear()
+    def pdf_ready(self,image,page,total):
+        self.image.setPixmap(QPixmap.fromImage(image));self.config['pdf_page']=page;self.ready=True;self.layout()
+        if self.layer.current and self is self.layer.decks[self.layer.active]:
+            self.layer.source_items()[self.layer.current[1]]['pdf_page']=page;self.layer.elapsed=0
     def clear(self):
-        self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.ready=False;self.loaded=False
+        self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.ready=False;self.loaded=False
     def status(self,status):
         if status==QMediaPlayer.LoadedMedia and not self.loaded:
             self.loaded=True;QTimer.singleShot(0,lambda:self.player.setPosition(max(clip_bounds(self.config,self.player.duration())[0],min(self.config.pop('_resume_ms',0),max(0,clip_bounds(self.config,self.player.duration())[1]-1)))))
@@ -58,7 +64,9 @@ class MediaDeck:
     def load(self,c):
         self.clear();self.config=deepcopy(c);p=c['path']
         if c.get('kind')!='black' and not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
-        if c.get('kind')=='black':
+        if is_pdf(c):
+            self.kind='pdf';self.item=self.image;self.pdf_source.load(p,c.get('pdf_page',0),QSizeF(self.layer.c['w'],self.layer.c['h']).toSize())
+        elif c.get('kind')=='black':
             self.kind='image';self.item=self.image;pix=QPixmap(2,2);pix.fill(Qt.black);self.image.setPixmap(pix);self.ready=True
         elif Path(p).suffix.lower() in IMAGE_EXT:
             reader=QImageReader(p);reader.setAutoTransform(True);image=reader.read()
@@ -71,7 +79,7 @@ class MediaDeck:
         w,h=self.layer.c['w'],self.layer.c['h']
         # Tile geometry owns both axes. Keep the complete source mapped to its rectangle.
         self.image.setScale(1);self.image.setTransform(QTransform())
-        if self.kind=='image' and not self.image.pixmap().isNull():
+        if self.kind in ('image','pdf') and not self.image.pixmap().isNull():
             iw,ih=self.image.boundingRect().width(),self.image.boundingRect().height()
             self.image.setTransform(QTransform.fromScale(w/iw,h/ih));self.image.setPos(0,0)
         else:
@@ -143,7 +151,7 @@ class Layer(QGraphicsRectItem):
         self.stop()
         if self.session:self.session.setVideoOutput(None);self.session.deleteLater()
         if self.capture:self.capture.deleteLater()
-        for d in self.decks:d.player.setVideoOutput(None);d.player.deleteLater();d.audio.deleteLater()
+        for d in self.decks:d.pdf_source.close();d.pdf_source.deleteLater();d.player.setVideoOutput(None);d.player.deleteLater();d.audio.deleteLater()
     def request(self,target,initial=False):
         host=self.panel.host
         if initial:target=self.next_target(target)
@@ -157,6 +165,8 @@ class Layer(QGraphicsRectItem):
         p,i=target
         items=self.source_items()
         if not 0<=i<len(items):self.stop();return
+        if is_powerpoint(items[i]):
+            host.status.setText('PowerPoint 動畫簡報使用獨立原生輸出，請切回單畫面播放。');self.stop();return
         initial_load=self.current is None
         self.current=target;self.running=True;idx=1-self.active;self.pending=(idx,time.monotonic());self.elapsed=0
         try:
@@ -180,9 +190,12 @@ class Layer(QGraphicsRectItem):
         return (group,result[1]) if result is not None else None
     def advance(self,reverse=False):
         if self.c['kind']=='playlist':
-            target=self.next_target(reverse=reverse);d=self.decks[self.active]
+            d=self.decks[self.active]
+            if d.kind=='pdf' and not self.pending and not self.transition and d.pdf_source.step(reverse):self.elapsed=0;return
+            target=self.next_target(reverse=reverse)
             if target==self.current and not self.pending and not self.transition:
                 self.elapsed=0
+                if d.kind=='pdf':d.pdf_source.set_page(d.pdf_source.count-1 if reverse else 0)
                 if d.kind=='video':d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]);d.player.play()
                 return
             self.request(target)
@@ -210,6 +223,11 @@ class Layer(QGraphicsRectItem):
             if f>=1:a.clear();b.layout();b.item.setOpacity(1);self.active=new;self.transition=None;self.elapsed=0
             return
         d=self.decks[self.active];d.audio.setVolume(self.gain()*d.gain())
+        if d.kind=='pdf':
+            if host.pdf_auto.isChecked() and not d.pdf_source.loading:
+                self.elapsed+=dt
+                if self.elapsed>=d.config.get('seconds',5):self.elapsed=0;self.advance()
+            return
         if d.kind=='image':
             self.elapsed+=dt
             if self.elapsed>=d.config.get('seconds',5):self.advance()
@@ -330,6 +348,8 @@ class Compositor(QDockWidget):
         self.assign_items(l,[self.host.lists[g]['items'][i]])
     def assign_items(self,l,items):
         if not items:return
+        if any(is_powerpoint(item) for item in items):
+            self.host.status.setText('PPT 動畫與音效使用 PowerPoint 獨立輸出，請切回單畫面後播放。');return
         l.stop();name=media_name(items[0])
         l.c.update(kind='playlist',name=name,fit=True,items=deepcopy(items));l.c.pop('cue_index',None);l.c.pop('cue_position',None)
         l.label.setText(name);l.resize_to(l.c['w'],l.c['h'])
@@ -415,11 +435,11 @@ class Compositor(QDockWidget):
         for c,l in zip(layout,self.layers):
             if c['kind']=='playlist':
                 c['items']=deepcopy(l.source_items());c['cue_index']=l.current[1] if l.current else 0
-                c['cue_position']=l.decks[l.active].player.position() if l.current and not is_still(l.decks[l.active].config) else 0
+                c['cue_position']=l.decks[l.active].player.position() if l.current and l.decks[l.active].kind=='video' else 0
         single=None
         if not self.enabled and self.host.current is not None:
             d=self.host.decks[self.host.active]
-            single={'media':deepcopy(self.host.current_item()),'position':d.player.position() if not is_still(d.config) else 0}
+            single={'media':deepcopy(self.host.current_item()),'position':d.player.position() if d.kind=='video' and not self.host.presentations.active else 0}
         return {'name':name,'cue_version':1,'layout':layout,'settings':self.host.settings(),'single':single}
     def remember(self):
         name,ok=QInputDialog.getText(self.host,'記錄 CUE','段落／場景名稱')
