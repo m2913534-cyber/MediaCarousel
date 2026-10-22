@@ -75,6 +75,9 @@ class Layer(QGraphicsRectItem):
         self.resize_to(self.c['w'],self.c['h']);self.setPos(self.c['x'],self.c['y'])
         self.capture_video=QGraphicsVideoItem(self);self.capture_video.setZValue(3);self.capture_video.setSize(QSizeF(self.c['w'],self.c['h']));self.capture_video.hide()
         self.editable(True)
+    def mouseDoubleClickEvent(self,event):
+        self.panel.list.setCurrentRow(self.panel.layers.index(self))
+        self.panel.replace_media();event.accept()
     def itemChange(self,change,value):
         if change==QGraphicsItem.ItemPositionChange and hasattr(self,'c'):
             from PySide6.QtCore import QPointF
@@ -117,7 +120,7 @@ class Layer(QGraphicsRectItem):
         for d in self.decks:d.player.setVideoOutput(None);d.player.deleteLater();d.audio.deleteLater()
     def request(self,target,initial=False):
         host=self.panel.host
-        if initial:target=following(host.lists,target,host.mode.currentText())
+        if initial:target=self.next_target(target)
         if target is None:self.stop();return
         if self.pending or self.transition:return
         p,i=target
@@ -125,8 +128,17 @@ class Layer(QGraphicsRectItem):
         self.current=target;self.running=True;idx=1-self.active;self.pending=(idx,time.monotonic());self.elapsed=0
         try:self.decks[idx].load(host.lists[p]['items'][i])
         except Exception as e:self.error(str(e))
+    def next_target(self,current=None,reverse=False):
+        # Each tile stays bound to its own source list, including single-file mode.
+        group=self.c['group'];lists=self.panel.host.lists
+        if not 0<=group<len(lists):return None
+        current=current or self.current or (group,-1)
+        mode=self.panel.host.mode.currentText()
+        if mode=='所有清單輪播':mode='清單循環'
+        result=following([lists[group]],(0,current[1]),mode,reverse)
+        return (group,result[1]) if result is not None else None
     def advance(self,reverse=False):
-        if self.c['kind']=='playlist':self.request(following(self.panel.host.lists,self.current or (self.c['group'],-1),self.panel.host.mode.currentText(),reverse))
+        if self.c['kind']=='playlist':self.request(self.next_target(reverse=reverse))
     def tick(self,dt):
         if not self.running or self.c['kind']!='playlist':return
         host=self.panel.host
@@ -158,7 +170,7 @@ class Layer(QGraphicsRectItem):
             start,end=clip_bounds(d.config,d.player.duration())
             if d.player.mediaStatus()==QMediaPlayer.EndOfMedia or (end and d.player.position()>=end):self.advance()
             elif end and end-start>host.duration.value()*2000 and 0<end-d.player.position()<=host.duration.value()*1000 and host.effect.currentText()!='直接切換':
-                if following(host.lists,self.current,host.mode.currentText()) is not None:self.advance()
+                if self.next_target() is not None:self.advance()
     def start_capture(self):
         self.stop();kind=self.c['kind'];host=self.panel.host
         if self.session:self.session.setVideoOutput(None);self.session.deleteLater()
@@ -191,13 +203,13 @@ class Compositor(QDockWidget):
         self.list=QListWidget();v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'＋清單畫面',self.add_playlist);self.button(row,'＋外部擷取',self.add_capture);self.button(row,'移除',self.remove)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media)
+        row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media);self.button(row,'更換此格檔案',self.replace_media)
         self.group=QComboBox();v.addWidget(self.group);self.group.currentIndexChanged.connect(self.change_group)
         self.controls={}
         for key,label,low,high in [('x','左',0,1920),('y','上',0,1080),('w','寬',80,1920),('h','高',45,1080),('gain','畫面音量 %',0,100)]:
             row=QHBoxLayout();v.addLayout(row);row.addWidget(QLabel(label));spin=QDoubleSpinBox();spin.setRange(low,high);spin.setDecimals(0);row.addWidget(spin);self.controls[key]=spin;spin.valueChanged.connect(self.update_layer)
         row=QHBoxLayout();v.addLayout(row)
-        self.button(row,'縮小 −10%',lambda:self.scale_selected(.9));self.button(row,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(row,'一鍵滿版',self.full_bleed)
+        self.button(row,'縮小 −10%',lambda:self.scale_selected(.9));self.button(row,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(row,'填滿此格',self.full_bleed)
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
         self.fit=QCheckBox('填滿此畫面（裁切）');v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'移到上層',lambda:self.reorder(1));self.button(row,'移到下層',lambda:self.reorder(-1))
@@ -258,6 +270,22 @@ class Compositor(QDockWidget):
         self.host.refresh_groups(group);self.enable.setChecked(True)
         self.add({'kind':'playlist','group':group,'name':Path(paths[0]).stem,'w':640,'h':360})
         self.host.persist_session()
+    def replace_media(self):
+        l=self.selected()
+        if l is None:
+            self.host.status.setText('請先選擇格子，或按 2×2 建立格子');return
+        paths,_=QFileDialog.getOpenFileNames(self.host,'選擇此格照片／影片','','照片與影片 (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff *.gif *.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有檔案 (*)')
+        if not paths:return
+        self.assign_media(l,paths)
+    def assign_media(self,l,paths):
+        if not paths:return
+        l.stop();group=len(self.host.lists)
+        name=Path(paths[0]).stem
+        self.host.lists.append({'name':name,'items':[{'path':p,'seconds':5,'start':0,'end':0,'gain':100,'mute':False} for p in paths]})
+        l.c.update(kind='playlist',group=group,name=name,fit=True)
+        l.label.setText(name);l.resize_to(l.c['w'],l.c['h'])
+        self.host.refresh_groups(group);self.refresh();self.list.setCurrentRow(self.layers.index(l));self.sync_controls()
+        self.enable.setChecked(True);l.start();self.host.persist_session()
     def scale_selected(self,factor):
         l=self.selected()
         if not l:return
@@ -269,10 +297,9 @@ class Compositor(QDockWidget):
     def full_bleed(self):
         l=self.selected()
         if not l:return
-        l.c['fit']=True;l.resize_to(1920,1080);l.setPos(0,0)
-        self.layers.remove(l);self.layers.append(l);self.refresh();self.list.setCurrentRow(len(self.layers)-1)
+        l.c['fit']=True;l.resize_to(l.c['w'],l.c['h'])
         self.sync_controls();self.host.persist_session()
-        self.host.status.setText('已滿版：1920×1080，等比例填滿（超出部分裁切）；此畫面已移到最上層。')
+        self.host.status.setText('已等比例裁切填滿此格；格子位置與尺寸不變。')
     def add_capture(self):
         kind,ok=QInputDialog.getItem(self.host,'外部擷取','來源種類',['攝影機／USB HDMI 擷取卡','螢幕','應用程式視窗'],0,False)
         if not ok:return
@@ -294,9 +321,19 @@ class Compositor(QDockWidget):
         i=self.list.currentRow();j=i+delta
         if 0<=i<len(self.layers) and 0<=j<len(self.layers):self.layers[i],self.layers[j]=self.layers[j],self.layers[i];self.refresh();self.list.setCurrentRow(j)
     def grid(self,cols,rows):
+        if len(self.layers)>cols*rows:
+            QMessageBox.information(self.host,'格子數不足','請先移除多餘畫面，再選擇此排列。');return
+        self.enable.setChecked(True)
+        while len(self.layers)<cols*rows:
+            group=len(self.host.lists);name=f'畫面 {len(self.layers)+1}（雙擊選檔）'
+            self.host.lists.append({'name':name,'items':[]})
+            self.add({'kind':'playlist','group':group,'name':name,'fit':True})
+        self.host.refresh_groups()
         for i,l in enumerate(self.layers):
-            l.resize_to(1920/cols,1080/rows);l.setPos((i%cols)*1920/cols,((i//cols)%rows)*1080/rows)
-        self.sync_controls()
+            l.c['fit']=True
+            l.resize_to(1920/cols,1080/rows);l.setPos((i%cols)*1920/cols,(i//cols)*1080/rows)
+        self.list.setCurrentRow(0);self.sync_controls();self.host.persist_session()
+        self.host.status.setText('雙擊各格或按「更換此格檔案」選擇內容；每格預設裁切填滿。')
     def snapshot(self):return [deepcopy(l.c) for l in self.layers]
     def restore(self,layout):
         for l in self.layers:l.dispose();self.host.screen.scene().removeItem(l)
@@ -337,4 +374,5 @@ class Compositor(QDockWidget):
         now=time.monotonic();dt=min(.25,now-self.last);self.last=now
         if self.enabled:
             for l in self.layers:l.tick(dt)
+
 

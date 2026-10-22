@@ -36,7 +36,7 @@ def normalize_layer(c, list_count):
     c['x']=min(c['x'],1920-c['w']);c['y']=min(c['y'],1080-c['h'])
     c['group']=int(number(c.get('group',0),0,0,max(0,list_count-1)))
     c['kind']=c.get('kind','playlist');c['name']=str(c.get('name','畫面'))[:120]
-    c['mute']=bool(c.get('mute',False));c['fit']=bool(c.get('fit',False))
+    c['mute']=bool(c.get('mute',False));c['fit']=bool(c.get('fit',True))
     return c
 
 def save_project(path, lists, settings, scenes=None, layout=None):
@@ -71,3 +71,4 @@ def load_project(path):
     if not isinstance(scenes,list):raise ValueError('場景資料錯誤')
     data['scenes']=[{'name':str(s['name'])[:120],'layout':layout(s['layout']),'settings':s.get('settings',{})} for s in scenes]
     return data
+
