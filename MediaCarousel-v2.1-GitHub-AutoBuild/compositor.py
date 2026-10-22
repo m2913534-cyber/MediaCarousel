@@ -6,13 +6,22 @@ from PySide6.QtCore import Qt, QTimer, QSizeF, QUrl, QRectF
 from PySide6.QtGui import QPen, QColor, QBrush, QPixmap, QImageReader
 from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTextItem,
     QDockWidget,QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QListWidget,QComboBox,
-    QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox,QFileDialog)
+    QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox,QFileDialog,QScrollArea,QGroupBox)
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS
 
+def clean_view(widget):
+    return widget is not None and bool(widget.property('clean_output'))
+
+class EditorLabel(QGraphicsSimpleTextItem):
+    def paint(self,painter,option,widget=None):
+        if not clean_view(widget):super().paint(painter,option,widget)
+
 class Handle(QGraphicsRectItem):
+    def paint(self,painter,option,widget=None):
+        if not clean_view(widget):super().paint(painter,option,widget)
     def __init__(self,parent):
         super().__init__(0,0,22,22,parent);self.setBrush(QColor('#6ee7d4'));self.setPen(QPen(Qt.NoPen));self.setZValue(10000)
         self.setCursor(Qt.SizeFDiagCursor)
@@ -20,7 +29,7 @@ class Handle(QGraphicsRectItem):
         self.origin=e.scenePos();p=self.parentItem();self.size=(p.c['w'],p.c['h']);e.accept()
     def mouseMoveEvent(self,e):
         p=self.parentItem();delta=e.scenePos()-self.origin
-        p.resize_to(min(1920-p.pos().x(),max(80,self.size[0]+delta.x())),min(1080-p.pos().y(),max(45,self.size[1]+delta.y())))
+        p.resize_to(min(p.panel.width_px-p.pos().x(),max(80,self.size[0]+delta.x())),min(p.panel.height_px-p.pos().y(),max(45,self.size[1]+delta.y())))
         p.panel.sync_controls();e.accept()
 
 class MediaDeck:
@@ -29,19 +38,19 @@ class MediaDeck:
         from PySide6.QtWidgets import QGraphicsPixmapItem
         self.image=QGraphicsPixmapItem(layer)
         self.player=QMediaPlayer();self.audio=QAudioOutput();self.player.setAudioOutput(self.audio);self.player.setVideoOutput(self.video)
-        self.kind='image';self.item=self.image;self.config={};self.ready=False;self.loaded=False
+        self.last_frame=None;self.kind='image';self.item=self.image;self.config={};self.ready=False;self.loaded=False
         self.player.mediaStatusChanged.connect(self.status)
         self.player.errorOccurred.connect(lambda e,m:layer.error(m))
         self.video.videoSink().videoFrameChanged.connect(self.frame)
         self.clear()
     def clear(self):
-        self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.ready=False;self.loaded=False
+        self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.ready=False;self.loaded=False
     def status(self,status):
         if status==QMediaPlayer.LoadedMedia and not self.loaded:
             self.loaded=True;QTimer.singleShot(0,lambda:self.player.setPosition(clip_bounds(self.config,self.player.duration())[0]))
         if status==QMediaPlayer.InvalidMedia:self.layer.error('無法解碼此媒體')
     def frame(self,f):
-        if f.isValid():self.ready=True
+        if f.isValid():self.ready=True;self.last_frame=f
     def load(self,c):
         self.clear();self.config=deepcopy(c);p=c['path']
         if not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
@@ -61,27 +70,36 @@ class MediaDeck:
         else:
             self.video.setSize(QSizeF(w,h));self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.layer.c.get('fit') else Qt.KeepAspectRatio);self.video.setPos(0,0);self.video.setScale(1)
         self.base=self.item.pos();self.scale=self.item.scale();self.item.setTransformOriginPoint(0,0)
+    def freeze(self):
+        self.player.pause()
+        if self.kind=='video' and self.last_frame is not None:
+            self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setZValue(self.video.zValue())
+            self.video.hide();self.kind='image';self.item=self.image;self.layout();self.image.setOpacity(1);self.image.show()
     def gain(self):
         return 0 if self.config.get('mute') else self.config.get('gain',100)/100
 
 class Layer(QGraphicsRectItem):
     def __init__(self,panel,c):
-        super().__init__();self.panel=panel;self.c=normalize_layer(c,len(panel.host.lists));self.capture=None;self.session=None
+        super().__init__();self.panel=panel;self.c=normalize_layer(c,len(panel.host.lists),panel.width_px,panel.height_px);self.capture=None;self.session=None
         self.setBrush(QBrush(Qt.black));self.setFlag(QGraphicsItem.ItemClipsChildrenToShape)
         self.setFlags(self.flags()|QGraphicsItem.ItemIsMovable|QGraphicsItem.ItemIsSelectable|QGraphicsItem.ItemSendsGeometryChanges)
         self.setCursor(Qt.OpenHandCursor);self.setZValue(10+len(panel.layers))
-        self.label=QGraphicsSimpleTextItem(self.c['name'],self);self.label.setBrush(QColor('#6ee7d4'));self.label.setZValue(9999);self.label.setPos(8,8)
-        self.handle=Handle(self);self.decks=[MediaDeck(self),MediaDeck(self)];self.active=0;self.current=None;self.pending=None;self.transition=None;self.elapsed=0;self.running=False
+        self.label=EditorLabel(self.c['name'],self);self.label.setBrush(QColor('#6ee7d4'));self.label.setZValue(9999);self.label.setPos(8,8)
+        self.handle=Handle(self);self.decks=[MediaDeck(self),MediaDeck(self)];self.active=0;self.current=None;self.pending=None;self.transition=None;self.elapsed=0;self.held=False;self.running=False
         self.resize_to(self.c['w'],self.c['h']);self.setPos(self.c['x'],self.c['y'])
         self.capture_video=QGraphicsVideoItem(self);self.capture_video.setZValue(3);self.capture_video.setSize(QSizeF(self.c['w'],self.c['h']));self.capture_video.hide()
         self.editable(True)
+    def paint(self,painter,option,widget=None):
+        if clean_view(widget):
+            painter.save();painter.setPen(Qt.NoPen);painter.setBrush(self.brush());painter.drawRect(self.rect());painter.restore()
+        else:super().paint(painter,option,widget)
     def mouseDoubleClickEvent(self,event):
         self.panel.list.setCurrentRow(self.panel.layers.index(self))
         self.panel.replace_media();event.accept()
     def itemChange(self,change,value):
         if change==QGraphicsItem.ItemPositionChange and hasattr(self,'c'):
             from PySide6.QtCore import QPointF
-            return QPointF(max(0,min(1920-self.c['w'],value.x())),max(0,min(1080-self.c['h'],value.y())))
+            return QPointF(max(0,min(self.panel.width_px-self.c['w'],value.x())),max(0,min(self.panel.height_px-self.c['h'],value.y())))
         if change==QGraphicsItem.ItemPositionHasChanged and hasattr(self,'c'):
             self.c['x']=value.x();self.c['y']=value.y()
             if self.isSelected():self.panel.sync_controls()
@@ -89,7 +107,7 @@ class Layer(QGraphicsRectItem):
     def resize_to(self,w,h):
         self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w-22,h-22)
         for d in self.decks:d.layout()
-        if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h))
+        if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h));self.capture_video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if self.c.get('fit') else Qt.KeepAspectRatio)
     def editable(self,enabled):
         self.setFlag(QGraphicsItem.ItemIsMovable,enabled);self.setFlag(QGraphicsItem.ItemIsSelectable,enabled)
         self.label.setVisible(enabled);self.handle.setVisible(enabled);self.setPen(QPen(QColor('#6ee7d4'),2) if enabled else QPen(Qt.NoPen))
@@ -100,6 +118,7 @@ class Layer(QGraphicsRectItem):
     def start(self):
         if self.c['kind']!='playlist':self.start_capture();return
         self.running=True
+        if self.held:self.request(self.current);return
         if self.current is None:self.request((self.c['group'],-1),initial=True)
         else:
             for d in self.decks:
@@ -109,7 +128,7 @@ class Layer(QGraphicsRectItem):
         if self.capture:self.capture.stop()
         for d in self.decks:d.player.pause()
     def stop(self):
-        self.running=False;self.pending=None;self.transition=None;self.current=None
+        self.held=False;self.running=False;self.pending=None;self.transition=None;self.current=None
         for d in self.decks:d.clear()
         if self.capture:self.capture.stop()
         if hasattr(self,'capture_video'):self.capture_video.hide()
@@ -121,8 +140,13 @@ class Layer(QGraphicsRectItem):
     def request(self,target,initial=False):
         host=self.panel.host
         if initial:target=self.next_target(target)
-        if target is None:self.stop();return
+        if target is None:
+            if self.panel.host.hold_last.isChecked() and self.current is not None:
+                self.held=True;self.running=False;self.decks[self.active].freeze()
+            else:self.stop()
+            return
         if self.pending or self.transition:return
+        self.held=False
         p,i=target
         if not (0<=p<len(host.lists) and 0<=i<len(host.lists[p]['items'])):self.stop();return
         self.current=target;self.running=True;idx=1-self.active;self.pending=(idx,time.monotonic());self.elapsed=0
@@ -138,7 +162,13 @@ class Layer(QGraphicsRectItem):
         result=following([lists[group]],(0,current[1]),mode,reverse)
         return (group,result[1]) if result is not None else None
     def advance(self,reverse=False):
-        if self.c['kind']=='playlist':self.request(self.next_target(reverse=reverse))
+        if self.c['kind']=='playlist':
+            target=self.next_target(reverse=reverse);d=self.decks[self.active]
+            if target==self.current and not self.pending and not self.transition:
+                self.elapsed=0
+                if d.kind=='video':d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]);d.player.play()
+                return
+            self.request(target)
     def tick(self,dt):
         if not self.running or self.c['kind']!='playlist':return
         host=self.panel.host
@@ -147,7 +177,7 @@ class Layer(QGraphicsRectItem):
             if not self.decks[idx].ready:
                 if time.monotonic()-started>20:self.error('解碼逾時')
                 return
-            effect=host.effect.currentText()
+            effect='直接切換' if self.panel.performance.isChecked() else host.effect.currentText()
             if effect=='隨機效果':effect=random.choice(EFFECTS[:-1])
             self.pending=None;self.transition=[idx,self.active,0,effect]
             self.decks[idx].item.setZValue(2);self.decks[self.active].item.setZValue(1)
@@ -169,8 +199,8 @@ class Layer(QGraphicsRectItem):
         else:
             start,end=clip_bounds(d.config,d.player.duration())
             if d.player.mediaStatus()==QMediaPlayer.EndOfMedia or (end and d.player.position()>=end):self.advance()
-            elif end and end-start>host.duration.value()*2000 and 0<end-d.player.position()<=host.duration.value()*1000 and host.effect.currentText()!='直接切換':
-                if self.next_target() is not None:self.advance()
+            elif not self.panel.performance.isChecked() and end and end-start>host.duration.value()*2000 and 0<end-d.player.position()<=host.duration.value()*1000 and host.effect.currentText()!='直接切換':
+                if self.next_target() not in (None,self.current):self.advance()
     def start_capture(self):
         self.stop();kind=self.c['kind'];host=self.panel.host
         if self.session:self.session.setVideoOutput(None);self.session.deleteLater()
@@ -197,14 +227,19 @@ class Compositor(QDockWidget):
     def __init__(self,host):
         super().__init__('多畫面／場景',host);self.host=host;self.layers=[];self.scenes=[];self.enabled=False;self.updating=False
         host.addDockWidget(Qt.RightDockWidgetArea,self);self.setMinimumWidth(310)
-        body=QWidget();self.setWidget(body);v=QVBoxLayout(body)
+        scroll=QScrollArea();scroll.setWidgetResizable(True);self.setWidget(scroll)
+        body=QWidget();scroll.setWidget(body);v=QVBoxLayout(body)
         self.enable=QCheckBox('啟用多畫面（最多 12 個）');v.addWidget(self.enable);self.enable.toggled.connect(self.set_enabled)
         self.edit=QCheckBox('顯示拖曳框與尺寸控制');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
-        self.list=QListWidget();v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
+        self.performance=QCheckBox('多畫面效能模式（直接切換）');self.performance.setChecked(True);v.addWidget(self.performance)
+        self.list=QListWidget();self.list.setMaximumHeight(160);v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
         row=QHBoxLayout();v.addLayout(row)
         self.button(row,'＋清單畫面',self.add_playlist);self.button(row,'＋外部擷取',self.add_capture);self.button(row,'移除',self.remove)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'＋照片／影片',self.add_media);self.button(row,'更換此格檔案',self.replace_media)
         self.group=QComboBox();v.addWidget(self.group);self.group.currentIndexChanged.connect(self.change_group)
+        detail=QWidget();detail_layout=QVBoxLayout(detail);detail_layout.setContentsMargins(0,0,0,0)
+        toggle=QPushButton('▸ 尺寸、音量與圖層');toggle.setCheckable(True);v.addWidget(toggle);v.addWidget(detail);detail.hide();toggle.toggled.connect(detail.setVisible)
+        outer=v;v=detail_layout
         self.controls={}
         for key,label,low,high in [('x','左',0,1920),('y','上',0,1080),('w','寬',80,1920),('h','高',45,1080),('gain','畫面音量 %',0,100)]:
             row=QHBoxLayout();v.addLayout(row);row.addWidget(QLabel(label));spin=QDoubleSpinBox();spin.setRange(low,high);spin.setDecimals(0);row.addWidget(spin);self.controls[key]=spin;spin.valueChanged.connect(self.update_layer)
@@ -213,13 +248,21 @@ class Compositor(QDockWidget):
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
         self.fit=QCheckBox('填滿此畫面（裁切）');v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'移到上層',lambda:self.reorder(1));self.button(row,'移到下層',lambda:self.reorder(-1))
+        v=outer
         row=QHBoxLayout();v.addLayout(row);self.button(row,'2×2',lambda:self.grid(2,2));self.button(row,'3×2',lambda:self.grid(3,2));self.button(row,'4×3',lambda:self.grid(4,3))
-        v.addWidget(QLabel('場景記憶（自動保存）'))
+        self.templates=QComboBox();self.templates.addItems(['左右雙畫面','上下雙畫面','三欄','三列','主畫面＋右側兩格','左上子畫面','右下子畫面','自訂欄列']);v.addWidget(self.templates)
+        self.button(v,'套用版型',self.apply_template)
+        self.button(v,'儲存自訂面板',self.remember)
+        v.addWidget(QLabel('已存面板／場景（含自訂位置尺寸）'))
         self.scene_list=QComboBox();v.addWidget(self.scene_list)
         row=QHBoxLayout();v.addLayout(row);self.button(row,'記憶新場景',self.remember);self.button(row,'載入',self.recall);self.button(row,'覆寫',self.overwrite);self.button(row,'改名',self.rename_scene);self.button(row,'刪除',self.delete_scene)
-        note=QLabel('編輯畫布 1920×1080；投影依所選螢幕縮放。外部擷取由「播放」啟動；場景載入後需重新播放。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
+        note=QLabel('畫布像素可從上方設定，支援 4K；投影依目標螢幕實際解析度。外部擷取由「播放」啟動；場景載入後需重新播放。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
         self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(16);self.last=time.monotonic()
         self.refresh_groups();host.screen.scene().selectionChanged.connect(self.scene_selection)
+    @property
+    def width_px(self):return self.host.screen.sceneRect().width()
+    @property
+    def height_px(self):return self.host.screen.sceneRect().height()
     def button(self,row,name,fn):
         b=QPushButton(name);row.addWidget(b);b.clicked.connect(lambda _=False:fn());return b
     def refresh_groups(self):
@@ -250,7 +293,7 @@ class Compositor(QDockWidget):
         if not l:return
         c=dict(l.c)
         for key,spin in self.controls.items():c[key]=spin.value()
-        c['mute']=self.mute.isChecked();c['fit']=self.fit.isChecked();l.c=normalize_layer(c,len(self.host.lists));l.resize_to(l.c['w'],l.c['h']);l.setPos(l.c['x'],l.c['y']);self.sync_controls()
+        c['mute']=self.mute.isChecked();c['fit']=self.fit.isChecked();l.c=normalize_layer(c,len(self.host.lists),self.width_px,self.height_px);l.resize_to(l.c['w'],l.c['h']);l.setPos(l.c['x'],l.c['y']);self.sync_controls()
     def change_group(self,index):
         if self.updating:return
         l=self.selected()
@@ -289,10 +332,10 @@ class Compositor(QDockWidget):
     def scale_selected(self,factor):
         l=self.selected()
         if not l:return
-        scale=max(80/l.c['w'],45/l.c['h'],min(factor,1920/l.c['w'],1080/l.c['h']))
+        scale=max(80/l.c['w'],45/l.c['h'],min(factor,self.width_px/l.c['w'],self.height_px/l.c['h']))
         w,h=l.c['w']*scale,l.c['h']*scale
         cx,cy=l.pos().x()+l.c['w']/2,l.pos().y()+l.c['h']/2
-        l.resize_to(w,h);l.setPos(max(0,min(1920-w,cx-w/2)),max(0,min(1080-h,cy-h/2)))
+        l.resize_to(w,h);l.setPos(max(0,min(self.width_px-w,cx-w/2)),max(0,min(self.height_px-h,cy-h/2)))
         self.sync_controls();self.host.persist_session()
     def full_bleed(self):
         l=self.selected()
@@ -321,6 +364,8 @@ class Compositor(QDockWidget):
         i=self.list.currentRow();j=i+delta
         if 0<=i<len(self.layers) and 0<=j<len(self.layers):self.layers[i],self.layers[j]=self.layers[j],self.layers[i];self.refresh();self.list.setCurrentRow(j)
     def grid(self,cols,rows):
+        if self.width_px/cols<80 or self.height_px/rows<45:
+            QMessageBox.information(self.host,'畫布太小','請增加畫布像素，讓每格至少 80×45。');return
         if len(self.layers)>cols*rows:
             QMessageBox.information(self.host,'格子數不足','請先移除多餘畫面，再選擇此排列。');return
         self.enable.setChecked(True)
@@ -331,9 +376,26 @@ class Compositor(QDockWidget):
         self.host.refresh_groups()
         for i,l in enumerate(self.layers):
             l.c['fit']=True
-            l.resize_to(1920/cols,1080/rows);l.setPos((i%cols)*1920/cols,(i//cols)*1080/rows)
+            l.resize_to(self.width_px/cols,self.height_px/rows);l.setPos((i%cols)*self.width_px/cols,(i//cols)*self.height_px/rows)
         self.list.setCurrentRow(0);self.sync_controls();self.host.persist_session()
         self.host.status.setText('雙擊各格或按「更換此格檔案」選擇內容；每格預設裁切填滿。')
+    def apply_template(self):
+        name=self.templates.currentText()
+        grids={'左右雙畫面':(2,1),'上下雙畫面':(1,2),'三欄':(3,1),'三列':(1,3)}
+        if name in grids:self.grid(*grids[name]);return
+        if name=='自訂欄列':
+            cols,ok=QInputDialog.getInt(self.host,'自訂面板','欄數',2,1,12)
+            if not ok:return
+            rows,ok=QInputDialog.getInt(self.host,'自訂面板','列數（總格數最多 12）',1,1,12//cols)
+            if ok:self.grid(cols,rows)
+            return
+        rects=[(0,0,.7,1),(.7,0,.3,.5),(.7,.5,.3,.5)] if name=='主畫面＋右側兩格' else [(0,0,1,1),(.03,.03,.3,.3) if name=='左上子畫面' else (.67,.67,.3,.3)]
+        if len(self.layers)>len(rects):
+            QMessageBox.information(self.host,'畫面數過多','請先移除多餘畫面再套用此版型。');return
+        self.grid(len(rects),1)
+        for l,(x,y,w,h) in zip(self.layers,rects):
+            l.resize_to(w*self.width_px,h*self.height_px);l.setPos(x*self.width_px,y*self.height_px)
+        self.sync_controls();self.host.persist_session()
     def snapshot(self):return [deepcopy(l.c) for l in self.layers]
     def restore(self,layout):
         for l in self.layers:l.dispose();self.host.screen.scene().removeItem(l)

@@ -28,12 +28,12 @@ def clip_bounds(item, duration_ms):
     end=int(number(item.get('end',0),0,0,86400)*1000) or duration
     return start,max(start+1,min(duration,end)) if duration else 0
 
-def normalize_layer(c, list_count):
+def normalize_layer(c, list_count, width=4096, height=4096):
     c=dict(c)
     if c.get('kind','playlist') not in ('playlist','camera','screen','window'): raise ValueError('未知影像來源')
-    for key,default,low,high in [('x',0,0,1920),('y',0,0,1080),('w',640,80,1920),('h',360,45,1080),('gain',100,0,100)]:
+    for key,default,low,high in [('x',0,0,width),('y',0,0,height),('w',640,80,width),('h',360,45,height),('gain',100,0,100)]:
         c[key]=number(c.get(key,default),default,low,high)
-    c['x']=min(c['x'],1920-c['w']);c['y']=min(c['y'],1080-c['h'])
+    c['x']=min(c['x'],width-c['w']);c['y']=min(c['y'],height-c['h'])
     c['group']=int(number(c.get('group',0),0,0,max(0,list_count-1)))
     c['kind']=c.get('kind','playlist');c['name']=str(c.get('name','畫面'))[:120]
     c['mute']=bool(c.get('mute',False));c['fit']=bool(c.get('fit',True))

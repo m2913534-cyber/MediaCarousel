@@ -1,4 +1,4 @@
-import os, sys, time, random
+import os, sys, time, random, json
 os.environ.setdefault('QT_MEDIA_BACKEND','ffmpeg')
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QUrl, QSizeF, QRectF, QStandardPaths
@@ -36,23 +36,31 @@ class Screen(QGraphicsView):
 
 class Deck:
     def __init__(self,screen):
-        self.video=QGraphicsVideoItem(); self.video.setSize(QSizeF(1920,1080))
+        self.screen=screen;self.last_frame=None;self.video=QGraphicsVideoItem(); self.video.setSize(QSizeF(1920,1080))
         self.image=QGraphicsPixmapItem(); screen.scene().addItem(self.video); screen.scene().addItem(self.image)
         self.audio=QAudioOutput(); self.player=QMediaPlayer(); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
+        self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
         self.item=self.image; self.kind='image'; self.config={}; self.clip_loaded=False; self.clear()
+    def remember_frame(self,frame):
+        if frame.isValid():self.last_frame=frame
+    def freeze(self):
+        self.player.pause()
+        if self.kind=='video' and self.last_frame is not None:
+            self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setPos(self.video.pos());self.image.setZValue(self.video.zValue())
+            self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.video.aspectRatioMode()==Qt.KeepAspectRatioByExpanding);self.image.setOpacity(1);self.image.show()
     def clear(self):
-        self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
+        self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
     def load(self,path,fit,config=None):
         self.clear(); self.path=path; self.config=dict(config or {}); self.clip_loaded=False
         if Path(path).suffix.lower() in IMAGE_EXT:
             reader=QImageReader(path); reader.setAutoTransform(True); image=reader.read()
             if image.isNull(): raise ValueError('無法讀取圖片')
             self.kind='image'; self.item=self.image; self.image.setPixmap(QPixmap.fromImage(image))
-            w,h=image.width(),image.height(); scale=(max if fit else min)(1920/w,1080/h)
-            self.image.setScale(scale); self.image.setPos((1920-w*scale)/2,(1080-h*scale)/2)
+            w,h=image.width(),image.height(); scale=(max if fit else min)(self.screen.sceneRect().width()/w,self.screen.sceneRect().height()/h)
+            self.image.setScale(scale); self.image.setPos((self.screen.sceneRect().width()-w*scale)/2,(self.screen.sceneRect().height()-h*scale)/2)
         else:
             self.kind='video'; self.item=self.video; self.video.setScale(1); self.video.setPos(0,0)
-            self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
+            self.video.setSize(self.screen.sceneRect().size());self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
             self.player.setSource(QUrl.fromLocalFile(path))
         self.item.setOpacity(0); self.item.show()
         self.basepos=self.item.pos(); self.basescale=self.item.scale()
@@ -62,17 +70,17 @@ class Deck:
         self.item.setTransformOriginPoint(0,0)
         if self.kind=='image' and not self.image.pixmap().isNull():
             w,h=self.image.pixmap().width(),self.image.pixmap().height()
-            scale=(max if fit else min)(1920/w,1080/h)
-            self.image.setScale(scale);self.image.setPos((1920-w*scale)/2,(1080-h*scale)/2)
+            scale=(max if fit else min)(self.screen.sceneRect().width()/w,self.screen.sceneRect().height()/h)
+            self.image.setScale(scale);self.image.setPos((self.screen.sceneRect().width()-w*scale)/2,(self.screen.sceneRect().height()-h*scale)/2)
         else:
-            self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
+            self.video.setSize(self.screen.sceneRect().size());self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
         self.basepos=self.item.pos();self.basescale=self.item.scale()
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.0｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.2｜影音輪播工作台'); self.resize(1320,820)
         self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
-        self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
+        self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
         for i,d in enumerate(self.decks):
             d.player.mediaStatusChanged.connect(lambda s,i=i:self.media_status(i,s))
@@ -110,6 +118,7 @@ class Window(QMainWindow):
         row=QHBoxLayout(); controls.addLayout(row); row.addWidget(QLabel('輪播模式'))
         self.mode=QComboBox(); self.mode.addItems(MODES); row.addWidget(self.mode)
         self.effect=QComboBox(); self.effect.addItems(EFFECTS); row.addWidget(self.effect)
+        self.hold_last=QCheckBox('播放一次結束：停留最後一幀');self.hold_last.setChecked(True);controls.addWidget(self.hold_last)
         self.duration=QDoubleSpinBox(); self.duration.setRange(.1,10); self.duration.setValue(1); self.duration.setSuffix(' 秒切換'); row.addWidget(self.duration)
         row=QHBoxLayout(); controls.addLayout(row); row.addWidget(QLabel('音量')); self.volume=QSlider(Qt.Horizontal); self.volume.setRange(0,100); self.volume.setValue(80); row.addWidget(self.volume)
         self.fit=QComboBox(); self.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）']); row.addWidget(self.fit);self.fit.currentIndexChanged.connect(self.refresh_media_fit)
@@ -120,8 +129,10 @@ class Window(QMainWindow):
         self.setAcceptDrops(True); split.setSizes([380,900]); self.refresh_groups()
         from compositor import Compositor
         self.compositor=Compositor(self)
-        self.output_view=Screen();self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
-        self.preview_view=Screen();self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
+        self.button(tools,'顯示／收起右側面板',lambda:self.compositor.setVisible(not self.compositor.isVisible()))
+        self.button(tools,'畫布像素／4K',self.configure_canvas)
+        self.output_view=Screen();self.output_view.viewport().setProperty('clean_output',True);self.output_view.setInteractive(False);self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
+        self.preview_view=Screen();self.preview_view.viewport().setProperty('clean_output',True);self.preview_view.setInteractive(False);self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
         self.timer=QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(16); self.last=time.monotonic()
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self,activated=fn)
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self.output_view,activated=fn)
@@ -141,7 +152,9 @@ class Window(QMainWindow):
         if not self.session_ready:return
         try:
             self.session_path.parent.mkdir(parents=True,exist_ok=True)
-            save_project(self.session_path,self.lists,self.settings(),self.compositor.scenes,self.compositor.snapshot())
+            state=json.dumps([self.lists,self.settings(),self.compositor.scenes,self.compositor.snapshot()],ensure_ascii=False,sort_keys=True)
+            if state==getattr(self,'_saved_state',None):return
+            save_project(self.session_path,self.lists,self.settings(),self.compositor.scenes,self.compositor.snapshot());self._saved_state=state
         except Exception as exc:
             self.status.setText('自動保存失敗：'+str(exc))
     def restore_project_data(self,data):
@@ -238,6 +251,7 @@ class Window(QMainWindow):
         self.failed.clear(); row=max(0,self.files.currentRow()); self.request((self.group_index(),row))
     def toggle(self):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return
+        if self.held:self.request(self.current);return
         if self.current is None:self.play_selected();return
         self.running=not self.running
         for i,d in enumerate(self.decks):
@@ -248,11 +262,16 @@ class Window(QMainWindow):
         if hasattr(self,'compositor'):self.compositor.stop()
         self.stop_single()
     def stop_single(self):
-        self.running=False; self.pending=None; self.transition=None; self.current=None; self.elapsed=0
+        self.held=False;self.running=False; self.pending=None; self.transition=None; self.current=None; self.elapsed=0
         for d in self.decks:d.clear()
         self.seek.setValue(0); self.status.setText('已停止')
     def request(self,target):
-        if target is None:self.stop();return
+        if target is None:
+            if self.hold_last.isChecked() and self.current is not None:
+                self.held=True;self.running=False;self.decks[self.active].freeze();self.status.setText('播放結束：停留最後一幀')
+            else:self.stop()
+            return
+        self.held=False
         p,i=target
         if not (0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items'])):return
         if self.pending or self.transition:return
@@ -298,7 +317,7 @@ class Window(QMainWindow):
         # Incoming transparency reveals outgoing media; outgoing remains opaque for a true dissolve.
         a.item.setOpacity(old if effect=='淡出至黑再淡入' else 1); b.item.setOpacity(new)
         if effect in ('向左滑動','向右滑動'):
-            offset=(1-t)*1920*(1 if effect=='向左滑動' else -1); b.item.setPos(b.basepos.x()+offset,b.basepos.y())
+            offset=(1-t)*self.screen.sceneRect().width()*(1 if effect=='向左滑動' else -1); b.item.setPos(b.basepos.x()+offset,b.basepos.y())
         if effect=='縮放淡入':b.item.setScale(b.basescale*(.85+.15*t))
         a.audio.setVolume(old*self.volume.value()/100*self.deck_gain(a)); b.audio.setVolume(new*self.volume.value()/100*self.deck_gain(b))
         if t>=1:
@@ -351,7 +370,6 @@ class Window(QMainWindow):
         else:self.fit.setCurrentIndex(1);self.refresh_media_fit()
         self.output_fit.setCurrentIndex(0);self.refresh_output_fit()
     def output(self):
-        self.compositor.edit.setChecked(False)
         if self.output_view.isFullScreen():self.output_view.showNormal()
         else:self.output_view.showFullScreen()
         QTimer.singleShot(0,self.output_view.refit)
@@ -360,7 +378,7 @@ class Window(QMainWindow):
         label,ok=QInputDialog.getItem(self,'選擇輸出螢幕','螢幕',labels,0,False)
         if ok:
             screen=screens[labels.index(label)];self.output_view.showNormal();self.output_view.winId();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
-    def settings(self):return {'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
+    def settings(self):return {'canvas_width':int(self.screen.sceneRect().width()),'canvas_height':int(self.screen.sceneRect().height()),'hold_last':self.hold_last.isChecked(),'performance':self.compositor.performance.isChecked(),'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
     def save(self):
         path,_=QFileDialog.getSaveFileName(self,'儲存輪播專案','','輪播專案 (*.mcarousel)')
         if path:
@@ -375,7 +393,30 @@ class Window(QMainWindow):
             self.restore_project_data(data)
             self.session_ready=True;self.persist_session()
         except Exception as e:QMessageBox.warning(self,'開啟失敗',str(e))
+    def configure_canvas(self):
+        presets=['1920×1080 Full HD','3840×2160 4K UHD','4096×2160 DCI 4K','1080×1920 直式','2160×3840 直式 4K','自訂像素']
+        choice,ok=QInputDialog.getItem(self,'畫布像素','選擇尺寸',presets,0,False)
+        if not ok:return
+        if choice=='自訂像素':
+            width,ok=QInputDialog.getInt(self,'自訂畫布','寬度（像素）',int(self.screen.sceneRect().width()),80,4096)
+            if not ok:return
+            height,ok=QInputDialog.getInt(self,'自訂畫布','高度（像素）',int(self.screen.sceneRect().height()),45,4096)
+            if not ok:return
+        else:width,height=map(int,choice.split()[0].split('×'))
+        self.set_canvas(width,height);self.persist_session()
+        self.status.setText(f'畫布 {width}×{height} 像素；全螢幕輸出依目標螢幕實際解析度。')
+    def set_canvas(self,width,height):
+        width=max(80,min(4096,int(width)));height=max(45,min(4096,int(height)))
+        old=self.screen.sceneRect();sx,sy=width/old.width(),height/old.height()
+        self.screen.scene().setSceneRect(0,0,width,height)
+        for view in (self.screen,self.output_view,self.preview_view):view.setSceneRect(0,0,width,height);view.refit()
+        for layer in self.compositor.layers:
+            x,y=layer.pos().x()*sx,layer.pos().y()*sy;layer.resize_to(layer.c['w']*sx,layer.c['h']*sy);layer.setPos(x,y)
+        for key,high in [('x',width),('y',height),('w',width),('h',height)]:
+            self.compositor.controls[key].blockSignals(True);self.compositor.controls[key].setMaximum(high);self.compositor.controls[key].blockSignals(False)
+        self.refresh_media_fit();self.compositor.sync_controls()
     def apply_settings(self,s):
+        self.set_canvas(s.get('canvas_width',1920),s.get('canvas_height',1080));self.hold_last.setChecked(s.get('hold_last',True));self.compositor.performance.setChecked(s.get('performance',True))
         self.mode.setCurrentText(s.get('mode',MODES[0]));self.effect.setCurrentText(s.get('effect',EFFECTS[0]));self.duration.setValue(float(s.get('duration',1)));self.volume.setValue(int(s.get('volume',80)));self.fit.setCurrentIndex(int(s.get('fit',0)));self.output_fit.setCurrentIndex(int(s.get('output_fit',0)))
     def formats(self):
         fmt=QMediaFormat();formats=fmt.supportedFileFormats(QMediaFormat.Decode);codecs=fmt.supportedVideoCodecs(QMediaFormat.Decode)
@@ -397,3 +438,4 @@ if __name__=='__main__':
             window.close();app.exit(0 if ok else 1)
         QTimer.singleShot(1500,finish_smoke)
     sys.exit(app.exec())
+
