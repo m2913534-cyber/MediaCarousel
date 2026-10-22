@@ -72,7 +72,7 @@ class MediaDeck:
         # Tile geometry owns both axes. Keep the complete source mapped to its rectangle.
         self.image.setScale(1);self.image.setTransform(QTransform())
         if self.kind=='image' and not self.image.pixmap().isNull():
-            iw,ih=self.image.pixmap().width(),self.image.pixmap().height()
+            iw,ih=self.image.boundingRect().width(),self.image.boundingRect().height()
             self.image.setTransform(QTransform.fromScale(w/iw,h/ih));self.image.setPos(0,0)
         else:
             self.video.setAspectRatioMode(Qt.IgnoreAspectRatio);self.video.setSize(QSizeF(w,h));self.video.setPos(0,0);self.video.setScale(1)

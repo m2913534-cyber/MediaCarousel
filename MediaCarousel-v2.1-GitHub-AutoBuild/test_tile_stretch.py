@@ -17,6 +17,11 @@ with tempfile.TemporaryDirectory() as folder:
  l.setPos(0,0)
  for other in c.layers[1:]:other.hide()
  c.edit.setChecked(False);d=l.decks[l.active]
+ # High-DPI images must fill using logical bounds, including @2x pixel metadata.
+ for ratio in [1,2]:
+  high=im.copy();high.setDevicePixelRatio(ratio);d.image.setPixmap(QPixmap.fromImage(high));d.layout()
+  assert d.image.mapRectToParent(d.image.boundingRect())==l.rect()
+ d.image.setPixmap(QPixmap.fromImage(im))
  for video in [False,True]:
   if video:
    d.image.hide();d.kind='video';d.item=d.video;d.video.videoSink().setVideoFrame(QVideoFrame(im));d.video.setOpacity(1);d.video.show()
