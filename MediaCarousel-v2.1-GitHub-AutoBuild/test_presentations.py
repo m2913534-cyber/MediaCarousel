@@ -52,7 +52,8 @@ with tempfile.TemporaryDirectory() as folder:
   w.request((0,1));token=w.presentations.generation
   w.presentations.native_opened({'_token':token,'slide':1,'total':3,'click':0,'clicks':2,'state':1});assert w.presentations.active
   w.advance();assert calls[-1][0]=='next';native_cue=c.capture_cue('原生PPT');assert native_cue['single']['media']['ppt_slide']==1
-  w.stop();assert not w.presentations.active
+  c.enable.setChecked(True);assert not w.presentations.active and w.current is None
+  c.enable.setChecked(False)
   # An asynchronous Office open must survive list edits without an invalid index.
   w.request((0,1));token=w.presentations.generation;w.lists[0]['items'].pop()
   w.presentations.native_opened({'_token':token,'slide':2,'total':3,'click':1,'clicks':2,'state':1})

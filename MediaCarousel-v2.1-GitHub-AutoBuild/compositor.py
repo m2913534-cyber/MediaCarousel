@@ -295,6 +295,7 @@ class Compositor(QDockWidget):
     def refresh_groups(self):
         self.group.blockSignals(True);self.group.clear();self.group.addItems([g['name'] for g in self.host.lists]);self.group.blockSignals(False)
     def set_enabled(self,value):
+        if hasattr(self.host,'presentations'):self.host.presentations.stop()
         self.host.stop_single();self.enabled=value;self.host.seek.setEnabled(not value)
         for l in self.layers:l.setVisible(value);l.stop()
         self.host.status.setText('多畫面模式：按播放啟動所有來源' if value else '單畫面模式')
