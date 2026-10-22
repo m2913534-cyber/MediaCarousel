@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint
+from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform
 
 class Screen(QGraphicsView):
     def __init__(self):
@@ -86,7 +86,7 @@ class Deck:
         self.item.setTransformOriginPoint(0,0)
 
     def apply_transform(self):
-        r=self.screen.sceneRect();self.root.setPos(self.config.get('single_x',0)*r.width(),self.config.get('single_y',0)*r.height());self.root.setScale(self.config.get('single_zoom',1))
+        r=self.screen.sceneRect();x,y,sx,sy=single_transform(self.config);self.root.setPos(x*r.width(),y*r.height());self.root.setScale(1);self.root.setTransform(QTransform.fromScale(sx,sy))
     def relayout(self,fit):
         self.fit_mode=int(fit);self.item.setTransformOriginPoint(0,0);cw,ch=self.screen.sceneRect().width(),self.screen.sceneRect().height()
         self.image.setTransform(QTransform());self.image.setScale(1)
@@ -101,7 +101,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.5｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.5.1｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -262,7 +262,7 @@ class Window(QMainWindow):
                 self.single_editor.enabled=False;self.status.setText('請先在左側選取檔案');return
             self.play_selected()
         self.single_editor.sync()
-        self.status.setText('單畫面編輯：拖曳影像移動、右下角縮放；滾輪也可縮放。按一鍵滿版可重設。' if self.single_editor.enabled else '已關閉單畫面拖曳縮放')
+        self.status.setText('單畫面編輯：四邊獨立調整寬高，四角自由拉伸；拖曳中央移動。一鍵滿版可重設。' if self.single_editor.enabled else '已關閉單畫面拖曳縮放')
     def toggle(self):
         if self.presentations.active:self.presentations.command('pause');return
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.toggle();return

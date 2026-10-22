@@ -90,6 +90,7 @@ class Interface:
         h.seek=QSlider(Qt.Horizontal);h.seek.setRange(0,1000);h.seek.sliderReleased.connect(h.seek_to);v.addWidget(h.seek)
         r=row(v);button(r,'⏮',lambda:h.advance(True));h.play_btn=button(r,'▶ 播放／暫停',h.toggle,'PrimaryButton');button(r,'■ 停止',h.stop,'StopButton');button(r,'⏭',h.advance);r.addStretch()
         self.edit_button=button(r,'拖曳縮放',h.free_transform);button(r,'一鍵滿版',h.fill_output)
+        self.edit_button.setToolTip('開啟八個控制點：左右只調寬度、上下只調高度，四角可自由拉伸。拖曳中央移動；Shift＋滾輪調寬，Alt＋滾輪調高。')
         r=row(v);r.addWidget(QLabel('主音量'));h.volume=QSlider(Qt.Horizontal);h.volume.setRange(0,100);h.volume.setValue(80);h.volume.setMaximumWidth(180);r.addWidget(h.volume)
         self.volume_label=QLabel('80%');h.volume.valueChanged.connect(lambda n:self.volume_label.setText(str(n)+'%'));r.addWidget(self.volume_label);r.addStretch()
         h.status=QLabel('加入媒體後即可播放。Space 播放／暫停 · F11 全螢幕');h.status.setWordWrap(True);h.status.setObjectName('SecondaryLabel');v.addWidget(h.status)

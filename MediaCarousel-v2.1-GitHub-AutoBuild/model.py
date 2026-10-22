@@ -37,6 +37,11 @@ def number(value, default, low, high):
     if not math.isfinite(value): value=default
     return max(low,min(high,value))
 
+def single_transform(item):
+    zoom=number(item.get('single_zoom',1),1,.05,8)
+    return (number(item.get('single_x',0),0,-4,4),number(item.get('single_y',0),0,-4,4),
+        number(item.get('single_scale_x',zoom),zoom,.05,8),number(item.get('single_scale_y',zoom),zoom,.05,8))
+
 def clip_bounds(item, duration_ms):
     duration=max(0,int(duration_ms))
     start=min(int(number(item.get('start',0),0,0,86400)*1000),max(0,duration-1))
@@ -75,6 +80,8 @@ def load_project(path):
         if not isinstance(item['path'],str):raise ValueError('媒體路徑錯誤')
         if item.get('kind')!='black':item['path']=str((Path(path).parent/item['path']).resolve())
         item['seconds']=number(item.get('seconds',5),5,.5,86400)
+        if any(key in item for key in ('single_x','single_y','single_zoom','single_scale_x','single_scale_y')):
+            x,y,sx,sy=single_transform(item);item.update(single_x=x,single_y=y,single_scale_x=sx,single_scale_y=sy,single_zoom=number(item.get('single_zoom',sx),sx,.05,8))
         if is_pdf(item):item['pdf_page']=int(number(item.get('pdf_page',0),0,0,1000000))
         if is_powerpoint(item):
             item['ppt_slide']=int(number(item.get('ppt_slide',1),1,1,1000000));item['ppt_click']=int(number(item.get('ppt_click',0),0,0,1000000))
