@@ -28,7 +28,7 @@ def clip_bounds(item, duration_ms):
     end=int(number(item.get('end',0),0,0,86400)*1000) or duration
     return start,max(start+1,min(duration,end)) if duration else 0
 
-def normalize_layer(c, list_count, width=4096, height=4096):
+def normalize_layer(c, list_count, width=1920, height=1080):
     c=dict(c)
     if c.get('kind','playlist') not in ('playlist','camera','screen','window'): raise ValueError('未知影像來源')
     for key,default,low,high in [('x',0,0,width),('y',0,0,height),('w',640,80,width),('h',360,45,height),('gain',100,0,100)]:
@@ -64,11 +64,13 @@ def load_project(path):
             item['start']=number(item.get('start',0),0,0,86400);item['end']=number(item.get('end',0),0,0,86400)
             if item['end'] and item['end']<=item['start']: raise ValueError('片段終點必須大於起點')
             item['gain']=number(item.get('gain',100),100,0,100);item['mute']=bool(item.get('mute',False))
-    def layout(value):
+    def layout(value,settings):
         if not isinstance(value,list) or len(value)>MAX_LAYERS: raise ValueError('畫面數量必須介於 0–12')
-        return [normalize_layer(c,len(data['lists'])) for c in value]
-    data['layout']=layout(data.get('layout',[])); scenes=data.get('scenes',[])
+        width=number(settings.get('canvas_width',1920),1920,80,4096)
+        height=number(settings.get('canvas_height',1080),1080,45,4096)
+        return [normalize_layer(c,len(data['lists']),width,height) for c in value]
+    data['layout']=layout(data.get('layout',[]),data.get('settings',{})); scenes=data.get('scenes',[])
     if not isinstance(scenes,list):raise ValueError('場景資料錯誤')
-    data['scenes']=[{'name':str(s['name'])[:120],'layout':layout(s['layout']),'settings':s.get('settings',{})} for s in scenes]
+    data['scenes']=[{'name':str(s['name'])[:120],'layout':layout(s['layout'],s.get('settings',{})),'settings':s.get('settings',{})} for s in scenes]
     return data
 
