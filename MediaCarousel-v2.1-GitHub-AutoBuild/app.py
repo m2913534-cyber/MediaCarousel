@@ -1,5 +1,12 @@
 import os, sys, time, random, json
 from copy import deepcopy
+if '--build-smoke-test' in sys.argv:
+    def smoke_exception(kind,value,tb):
+        import traceback
+        report=sys.argv[sys.argv.index('--build-smoke-test')+1]
+        with open(report,'w',encoding='utf-8') as stream:json.dump({'ok':False,'error':''.join(traceback.format_exception(kind,value,tb))},stream)
+        os._exit(1)
+    sys.excepthook=smoke_exception
 os.environ.setdefault('QT_MEDIA_BACKEND','ffmpeg')
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QUrl, QSizeF, QRectF, QStandardPaths
@@ -491,7 +498,7 @@ if __name__=='__main__':
             from PySide6.QtCore import QSize
             from PySide6.QtPdf import QPdfDocument
             pdfpath=report.with_suffix('.pdf');writer=QPdfWriter(str(pdfpath));painter=QPainter(writer);painter.fillRect(0,0,writer.width(),writer.height(),QColor('green'));painter.end();del writer
-            pdf=QPdfDocument();error=pdf.load(str(pdfpath));pdf_ok=error==QPdfDocument.Error.None_ and not pdf.render(0,QSize(80,80)).isNull();pdf.close();pdfpath.unlink(missing_ok=True)
+            pdf=QPdfDocument();error=pdf.load(str(pdfpath));pdf_ok=error==QPdfDocument.Error.None_ and not pdf.render(0,QSize(80,80)).isNull();pdf.close()
             bridge_ok=True
             if sys.platform=='win32':
                 try:import pythoncom,win32com.client
