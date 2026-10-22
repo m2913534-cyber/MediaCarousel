@@ -54,10 +54,14 @@ class MediaDeck:
         if self.layer.current and self is self.layer.decks[self.layer.active]:
             self.layer.source_items()[self.layer.current[1]]['pdf_page']=page;self.layer.elapsed=0
     def clear(self):
-        self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.ready=False;self.loaded=False
+        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.audio.setMuted(False);self.ready=False;self.loaded=False
+    def resume_position(self,generation):
+        if generation!=self.load_generation:return
+        start,end=clip_bounds(self.config,self.player.duration());target=max(start,min(self.config.pop('_resume_ms',0),max(0,end-1)))
+        if target>0:self.player.setPosition(target)
     def status(self,status):
         if status==QMediaPlayer.LoadedMedia and not self.loaded:
-            self.loaded=True;QTimer.singleShot(0,lambda:self.player.setPosition(max(clip_bounds(self.config,self.player.duration())[0],min(self.config.pop('_resume_ms',0),max(0,clip_bounds(self.config,self.player.duration())[1]-1)))))
+            self.loaded=True;generation=self.load_generation;QTimer.singleShot(0,lambda generation=generation:self.resume_position(generation))
         if status==QMediaPlayer.InvalidMedia:self.layer.error('無法解碼此媒體')
     def frame(self,f):
         if f.isValid():self.ready=True;self.last_frame=f
@@ -130,6 +134,15 @@ class Layer(QGraphicsRectItem):
         self.stop();self.panel.host.status.setText(self.c['name']+'：'+message)
     def gain(self):
         return 0 if self.c.get('mute') else self.c.get('gain',100)/100*self.panel.host.volume.value()/100
+    def apply_audio(self,progress=None):
+        envelopes=[0.,0.]
+        if self.transition:
+            new,old,t,effect=self.transition;t=max(0,min(1,progress if progress is not None else t/self.panel.host.duration.value()))
+            ag,bg=(max(0,1-2*t),max(0,2*t-1)) if effect=='淡出至黑再淡入' else (1-t,t)
+            if effect=='直接切換':ag,bg=0,1
+            envelopes[old],envelopes[new]=ag,bg
+        elif self.current is not None:envelopes[self.active]=1
+        for i,d in enumerate(self.decks):d.audio.setMuted(bool(self.c.get('mute') or d.config.get('mute')));d.audio.setVolume(envelopes[i]*self.gain()*d.gain())
     def start(self):
         if self.c['kind']!='playlist':self.start_capture();return
         self.running=True
@@ -173,6 +186,7 @@ class Layer(QGraphicsRectItem):
             item=deepcopy(items[i])
             if initial_load and 'cue_position' in self.c:item['_resume_ms']=self.c['cue_position']
             self.decks[idx].load(item)
+            self.decks[idx].source_ref=items[i]
         except Exception as e:self.error(str(e))
     def source_items(self):
         if 'items' in self.c:return self.c['items']
@@ -219,10 +233,10 @@ class Layer(QGraphicsRectItem):
             a.item.setOpacity(ag if effect=='淡出至黑再淡入' else 1);b.item.setOpacity(bg)
             if effect in ('向左滑動','向右滑動'):b.item.setPos(b.base.x()+(1-f)*self.c['w']*(1 if effect=='向左滑動' else -1),b.base.y())
             if effect=='縮放淡入':b.item.setScale(b.scale*(.85+.15*f))
-            a.audio.setVolume(ag*self.gain()*a.gain());b.audio.setVolume(bg*self.gain()*b.gain())
+            self.apply_audio(f)
             if f>=1:a.clear();b.layout();b.item.setOpacity(1);self.active=new;self.transition=None;self.elapsed=0
             return
-        d=self.decks[self.active];d.audio.setVolume(self.gain()*d.gain())
+        d=self.decks[self.active];self.apply_audio()
         if d.kind=='pdf':
             if host.pdf_auto.isChecked() and not d.pdf_source.loading:
                 self.elapsed+=dt
@@ -307,7 +321,10 @@ class Compositor(QDockWidget):
     def selected(self):
         row=self.list.currentRow();return self.layers[row] if 0<=row<len(self.layers) else None
     def select_layer(self,row):
-        for i,l in enumerate(self.layers):l.setSelected(i==row and self.edit.isChecked())
+        scene=self.host.screen.scene();blocked=scene.blockSignals(True)
+        try:
+            for i,l in enumerate(self.layers):l.setSelected(i==row and self.edit.isChecked())
+        finally:scene.blockSignals(blocked)
         self.sync_controls()
     def sync_controls(self):
         l=self.selected()
@@ -321,7 +338,7 @@ class Compositor(QDockWidget):
         if not l:return
         c=dict(l.c)
         for key,spin in self.controls.items():c[key]=spin.value()
-        c['mute']=self.mute.isChecked();c['fit']=self.fit.isChecked();l.c=normalize_layer(c,len(self.host.lists),self.width_px,self.height_px);l.resize_to(l.c['w'],l.c['h']);l.setPos(l.c['x'],l.c['y']);self.sync_controls()
+        c['mute']=self.mute.isChecked();c['fit']=self.fit.isChecked();l.c=normalize_layer(c,len(self.host.lists),self.width_px,self.height_px);l.resize_to(l.c['w'],l.c['h']);l.setPos(l.c['x'],l.c['y']);l.apply_audio();self.sync_controls()
     def change_group(self,index):
         if self.updating:return
         l=self.selected()

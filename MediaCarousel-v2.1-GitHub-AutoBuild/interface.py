@@ -127,7 +127,8 @@ class Interface:
     def finish(self,c):
         h=self.host;self.docks.append(c);self.cue_panel=CuePanel(c);self.cue_dock=self.dock('CueDock','CUE · 場景',self.cue_panel,Qt.BottomDockWidgetArea)
         from audio_meter import AudioMeter
-        c.meter=AudioMeter(h);self.audio_dock=self.dock('AudioDock','音訊監看',c.meter,Qt.RightDockWidgetArea)
+        from audio_mixer import AudioPanel
+        c.meter=AudioMeter(h);self.audio_panel=AudioPanel(h,c.meter);h.audio_mixer=self.audio_panel.mixer;self.audio_dock=self.dock('AudioDock','音訊監看／影片 FADER',self.audio_panel,Qt.RightDockWidgetArea)
         for d in self.docks:self.view_menu.addAction(d.toggleViewAction())
         self.view_menu.addSeparator();action(self.view_menu,'預覽視窗',h.show_preview)
         self.apply_theme(self.preferences.value('theme',0,type=int),save=False);self.apply_layout(self.preferences.value('layout',0,type=int),save=False)
@@ -166,6 +167,14 @@ class Interface:
         QSlider::groove:horizontal { height: 5px; background: %(raised)s; border-radius: 2px; }
         QSlider::sub-page:horizontal { background: %(accent)s; border-radius: 2px; }
         QSlider::handle:horizontal { background: %(accent)s; width: 13px; margin: -4px 0; border-radius: 6px; }
+        QWidget#ChannelStrip { background: %(panel)s; border: 1px solid %(line)s; border-radius: 5px; }
+        QLabel#FaderReadout { color: %(accent)s; font-family: Consolas, monospace; font-weight: 600; }
+        QSlider#ChannelFader::groove:vertical { width: 8px; background: %(bg)s; border: 1px solid %(line)s; border-radius: 3px; }
+        QSlider#ChannelFader::sub-page:vertical { background: %(raised)s; border-radius: 3px; }
+        QSlider#ChannelFader::add-page:vertical { background: %(accent)s; border-radius: 3px; }
+        QSlider#ChannelFader::handle:vertical { height: 20px; margin: 0 -11px; background: #e8eef3; border: 2px solid #526675; border-radius: 3px; }
+        QPushButton#ChannelMute { padding: 6px 2px; font-size: 11px; }
+        QPushButton#ChannelMute:checked { background: #b4384c; border-color: #ed7387; color: #ffffff; font-weight: 600; }
         QScrollArea { border: none; }
         QScrollBar:vertical { background: %(bg)s; width: 10px; }
         QScrollBar::handle:vertical { background: %(line)s; min-height: 24px; border-radius: 4px; }
@@ -194,7 +203,7 @@ class Interface:
         h.setUpdatesEnabled(False)
         try:
             for d in self.docks:d.setFloating(False);h.removeDockWidget(d);d.setMinimumSize(180,100);d.setMaximumSize(16777215,16777215)
-            c.tabs.show();c.meter.set_vertical(index==2);self.cue_panel.set_performance(index==2)
+            c.tabs.show();self.audio_panel.set_performance(index==2);self.cue_panel.set_performance(index==2)
             h.setCorner(Qt.BottomLeftCorner,Qt.LeftDockWidgetArea if index in (0,1) else Qt.BottomDockWidgetArea)
             h.setCorner(Qt.BottomRightCorner,Qt.BottomDockWidgetArea)
             if index==0:

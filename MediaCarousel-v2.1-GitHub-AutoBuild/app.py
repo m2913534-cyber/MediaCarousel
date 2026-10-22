@@ -64,9 +64,13 @@ class Deck:
             self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setPos(self.video.pos());self.image.setZValue(self.video.zValue())
             self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.fit_mode);self.image.setOpacity(1);self.image.show()
     def clear(self):
-        self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0)
+        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0);self.audio.setMuted(False)
+    def resume_position(self,generation):
+        if generation!=self.load_generation:return
+        start,end=clip_bounds(self.config,self.player.duration());target=max(start,min(self.config.pop('_resume_ms',0),max(0,end-1)))
+        if target>0:self.player.setPosition(target)
     def load(self,path,fit,config=None):
-        self.clear(); self.path=path; self.config=dict(config or {}); self.clip_loaded=False
+        self.clear(); self.path=path;self.source_ref=config; self.config=dict(config or {}); self.clip_loaded=False
         if is_pdf(self.config):
             self.kind='pdf';self.item=self.image;self.fit_mode=int(fit);self.pdf_source.load(path,self.config.get('pdf_page',0),self.screen.sceneRect().size().toSize())
         elif self.config.get('kind')=='black':
@@ -101,7 +105,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.5.1｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.6｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -121,6 +125,9 @@ class Window(QMainWindow):
         self.preview_view=Screen();self.preview_view.viewport().setProperty('clean_output',True);self.preview_view.setInteractive(False);self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
         from presentations import PresentationController
         self.presentations=PresentationController(self)
+        self.volume.valueChanged.connect(self.refresh_live_audio)
+        self.clip_gain.valueChanged.connect(lambda value:self.live_selected_audio(gain=value))
+        self.clip_mute.toggled.connect(lambda value:self.live_selected_audio(mute=value))
         self.timer=QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(16); self.last=time.monotonic()
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self,activated=fn)
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self.output_view,activated=fn)
@@ -162,10 +169,38 @@ class Window(QMainWindow):
             if item.get('kind')!='black' and not path.is_file(): text='⚠ 遺失  '+text
             self.files.addItem(text)
     def selection(self,row):
-        items=self.lists[self.group_index()]['items']; self.seconds.blockSignals(True)
+        items=self.lists[self.group_index()]['items']; self.seconds.blockSignals(True);self.clip_gain.blockSignals(True);self.clip_mute.blockSignals(True)
         if 0<=row<len(items):
             c=items[row];self.seconds.setValue(c['seconds']);self.clip_start.setValue(c.get('start',0));self.clip_end.setValue(c.get('end',0));self.clip_gain.setValue(c.get('gain',100));self.clip_mute.setChecked(c.get('mute',False))
-        self.seconds.blockSignals(False)
+        self.seconds.blockSignals(False);self.clip_gain.blockSignals(False);self.clip_mute.blockSignals(False)
+    def sync_selected_audio(self):
+        row=self.files.currentRow();items=self.lists[self.group_index()]['items']
+        if not 0<=row<len(items):return
+        self.clip_gain.blockSignals(True);self.clip_mute.blockSignals(True);self.clip_gain.setValue(items[row].get('gain',100));self.clip_mute.setChecked(items[row].get('mute',False));self.clip_gain.blockSignals(False);self.clip_mute.blockSignals(False)
+    def live_selected_audio(self,gain=None,mute=None):
+        row=self.files.currentRow();items=self.lists[self.group_index()]['items']
+        if not 0<=row<len(items):return
+        source=items[row];changes={}
+        if gain is not None:changes['gain']=gain
+        if mute is not None:changes['mute']=bool(mute)
+        source.update(changes)
+        decks=list(self.decks)+[d for l in self.compositor.layers for d in l.decks]
+        for d in decks:
+            if d.source_ref is source:d.config.update(changes)
+        self.refresh_live_audio();self.persist_session()
+    def refresh_live_audio(self,*_):
+        self.apply_audio()
+        for layer in self.compositor.layers:layer.apply_audio()
+    def apply_audio(self,progress=None):
+        envelopes=[0.,0.]
+        if self.transition:
+            tr=self.transition;t=max(0,min(1,progress if progress is not None else tr['time']/self.duration.value()))
+            old,new=(max(0,1-2*t),max(0,2*t-1)) if tr['effect']=='淡出至黑再淡入' else (1-t,t)
+            if tr['effect']=='直接切換':old,new=0,1
+            envelopes[tr['old']],envelopes[tr['new']]=old,new
+        elif self.current is not None:envelopes[self.active]=1
+        for i,d in enumerate(self.decks):
+            d.audio.setMuted(bool(d.config.get('mute')));d.audio.setVolume(envelopes[i]*self.volume.value()/100*self.deck_gain(d))
     def show_preview(self):
         self.preview_view.show();self.preview_view.raise_();self.preview_view.refit()
     def media_menu(self,pos):
@@ -208,7 +243,7 @@ class Window(QMainWindow):
         start,end=self.clip_start.value(),self.clip_end.value()
         if end and end<=start:QMessageBox.warning(self,'片段錯誤','結束秒數必須大於開始秒數');return
         items[row].update(start=start,end=end,gain=self.clip_gain.value(),mute=self.clip_mute.isChecked())
-        self.persist_session();self.status.setText('片段與音量已儲存；目前輸出繼續播放，重新播放或套用來源時生效。')
+        self.live_selected_audio(gain=self.clip_gain.value(),mute=self.clip_mute.isChecked());self.status.setText('音量與靜音即時生效；片段起訖在下次播放時套用。')
     def set_seconds(self,value):
         row=self.files.currentRow(); items=self.lists[self.group_index()]['items']
         if 0<=row<len(items): items[row]['seconds']=value; self.render(); self.files.setCurrentRow(row)
@@ -318,7 +353,7 @@ class Window(QMainWindow):
     def media_status(self,index,status):
         d=self.decks[index]
         if status==QMediaPlayer.LoadedMedia and not d.clip_loaded:
-            d.clip_loaded=True;QTimer.singleShot(0,lambda d=d:d.player.setPosition(max(clip_bounds(d.config,d.player.duration())[0],min(d.config.pop('_resume_ms',0),max(0,clip_bounds(d.config,d.player.duration())[1]-1)))))
+            d.clip_loaded=True;generation=d.load_generation;QTimer.singleShot(0,lambda d=d,generation=generation:d.resume_position(generation))
         if status==QMediaPlayer.EndOfMedia and index==self.active and not self.pending and not self.transition and self.running:self.advance()
     def media_error(self,index,message):
         if (self.pending and index==self.pending['index']) or (index==self.active and self.current):self.fail(message)
@@ -348,7 +383,7 @@ class Window(QMainWindow):
         if effect in ('向左滑動','向右滑動'):
             offset=(1-t)*self.screen.sceneRect().width()*(1 if effect=='向左滑動' else -1); b.item.setPos(b.basepos.x()+offset,b.basepos.y())
         if effect=='縮放淡入':b.item.setScale(b.basescale*(.85+.15*t))
-        a.audio.setVolume(old*self.volume.value()/100*self.deck_gain(a)); b.audio.setVolume(new*self.volume.value()/100*self.deck_gain(b))
+        self.apply_audio(t)
         if t>=1:
             a.clear(); b.item.setPos(b.basepos); b.item.setScale(b.basescale); b.item.setOpacity(1)
             self.active=tr['new']; self.transition=None;self.single_editor.sync()
@@ -378,7 +413,7 @@ class Window(QMainWindow):
             self.transition['time']+=dt; self.update_transition(min(1,self.transition['time']/self.duration.value()));return
         if self.current is None:return
         d=self.decks[self.active]; item=self.current_item()
-        d.audio.setVolume(self.volume.value()/100*self.deck_gain(d))
+        self.apply_audio()
         if d.kind=='pdf':
             if self.pdf_auto.isChecked() and not d.pdf_source.loading:
                 self.elapsed+=dt
