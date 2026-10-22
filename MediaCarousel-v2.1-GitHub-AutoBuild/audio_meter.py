@@ -28,9 +28,27 @@ class AudioProbe:
 
 class AudioMeter(QWidget):
     def __init__(self,host):
-        super().__init__();self.host=host;self.setMinimumHeight(165);self.setMaximumHeight(180)
+        super().__init__();self.host=host;self.vertical=False;self.colors={'bg':'#091019','text':'#dce7ef','dim':'#8196a8','raised':'#1d2a36','accent':'#36d28b'};self.setMinimumHeight(165);self.setMaximumHeight(180)
         self.db=[-60.,-60.];self.rms=[-60.,-60.];self.hold=[-60.,-60.];self.until=[0.,0.];self.clip_until=0;self.probe=None;self.label='等待音訊';self.last=time.monotonic()
         self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(50)
+    def set_colors(self,palette):
+        self.colors=dict(palette);self.update()
+    def set_vertical(self,on):
+        self.vertical=on;self.setMinimumSize(110 if on else 180,300 if on else 165);self.setMaximumHeight(16777215 if on else 180);self.update()
+    def paint_vertical(self,p):
+        width,height=self.width(),self.height();top,bottom=55,height-65;span=max(80,bottom-top)
+        p.setPen(QColor(self.colors['text']));p.drawText(12,20,'L / R');p.setPen(QColor(self.colors['dim']));p.drawText(12,38,'dBFS · POST')
+        for ch in range(2):
+            x=14+ch*30
+            for k in range(30):
+                threshold=-60+2*k;color=self.colors['raised']
+                if self.db[ch]>-60 and self.db[ch]>=threshold:color='#ff4757' if threshold>=-6 else '#ffc34d' if threshold>=-18 else '#36d28b'
+                p.fillRect(QRectF(x,bottom-(k+1)*span/30,18,span/30-2),QColor(color))
+            y=bottom-max(0,min(60,self.hold[ch]+60))/60*span;p.fillRect(QRectF(x-2,y,22,2),QColor(self.colors['text']))
+            p.setPen(QColor(self.colors['text']));p.drawText(x+4,bottom+18,'LR'[ch]);p.setPen(QColor(self.colors['dim']));p.drawText(x-3,bottom+36,f'{self.db[ch]:.0f}')
+        p.setPen(QColor(self.colors['dim']))
+        for value in [0,-12,-24,-36,-48,-60]:p.drawText(78,int(bottom-(value+60)/60*span)+4,str(value))
+        p.setPen(QColor('#ff4757') if time.monotonic()<self.clip_until else QColor(self.colors['dim']));p.drawText(12,height-9,'● CLIP' if time.monotonic()<self.clip_until else '○ CLIP')
     def refresh(self):
         h=self.host;now=time.monotonic();dt=min(1,now-self.last);self.last=now
         layer=h.compositor.selected() if h.compositor.enabled else None
@@ -54,18 +72,20 @@ class AudioMeter(QWidget):
             if peak>=.999:self.clip_until=now+1.5
         self.update()
     def paintEvent(self,event):
-        p=QPainter(self);p.fillRect(self.rect(),QColor('#091019'));p.setFont(QFont('Consolas',9));p.setPen(QColor('#b9c8d6'));p.drawText(10,18,self.label)
+        p=QPainter(self);p.fillRect(self.rect(),QColor(self.colors['bg']));p.setFont(QFont('Consolas',9));p.setPen(QColor(self.colors['dim']))
+        if self.vertical:self.paint_vertical(p);return
+        p.drawText(10,18,self.label)
         p.drawText(10,36,'SAMPLE PEAK / RMS    dBFS')
         left=30;right=self.width()-12;span=right-left
         for ch in range(2):
-            y=51+ch*37;p.setPen(QColor('#dce7ef'));p.drawText(10,y+14,'LR'[ch])
+            y=51+ch*37;p.setPen(QColor(self.colors['text']));p.drawText(10,y+14,'LR'[ch])
             for k in range(30):
-                threshold=-60+2*k;color='#1d2a36'
-                if self.db[ch]>=threshold:color='#ff4757' if threshold>=-6 else '#ffc34d' if threshold>=-18 else '#36d28b'
+                threshold=-60+2*k;color=self.colors['raised']
+                if self.db[ch]>-60 and self.db[ch]>=threshold:color='#ff4757' if threshold>=-6 else '#ffc34d' if threshold>=-18 else '#36d28b'
                 p.fillRect(QRectF(left+k*span/30,y,span/30-2,16),QColor(color))
-            x=left+max(0,min(60,self.hold[ch]+60))/60*span;p.fillRect(QRectF(x-1,y-2,2,20),QColor('#ffffff'))
-            p.setPen(QColor('#8ba4b9'));p.drawText(left,y+30,f'PK {self.db[ch]:5.1f}   RMS {self.rms[ch]:5.1f}')
-        p.setPen(QColor('#8196a8'))
+            x=left+max(0,min(60,self.hold[ch]+60))/60*span;p.fillRect(QRectF(x-1,y-2,2,20),QColor(self.colors['text']))
+            p.setPen(QColor(self.colors['dim']));p.drawText(left,y+30,f'PK {self.db[ch]:5.1f}   RMS {self.rms[ch]:5.1f}')
+        p.setPen(QColor(self.colors['dim']))
         for db in [-60,-48,-36,-24,-12,0]:p.drawText(int(left+(db+60)/60*span)-10,137,str(db))
         p.setPen(QColor('#ff4757') if time.monotonic()<self.clip_until else QColor('#455464'));p.drawText(10,158,'● CLIP' if time.monotonic()<self.clip_until else '○ CLIP')
-        p.setPen(QColor('#8196a8'));p.drawText(86,158,'選取來源／非系統總混音')
+        p.setPen(QColor(self.colors['dim']));p.drawText(86,158,'選取來源／非系統總混音')

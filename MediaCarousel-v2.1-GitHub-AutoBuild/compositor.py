@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QTimer, QSizeF, QUrl, QRectF
 from PySide6.QtGui import QPen, QColor, QBrush, QPixmap, QImageReader,QTransform
 from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTextItem,
     QDockWidget,QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QListWidget,QComboBox,
-    QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox,QFileDialog,QScrollArea,QGroupBox)
+    QLabel,QDoubleSpinBox,QCheckBox,QInputDialog,QMessageBox,QFileDialog,QScrollArea,QGroupBox,QTabWidget)
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -243,39 +243,29 @@ class Layer(QGraphicsRectItem):
 class Compositor(QDockWidget):
     def __init__(self,host):
         super().__init__('多畫面／場景',host);self.host=host;self.layers=[];self.scenes=[];self.enabled=False;self.updating=False
-        host.addDockWidget(Qt.RightDockWidgetArea,self);self.setMinimumWidth(310)
-        scroll=QScrollArea();scroll.setWidgetResizable(True);self.setWidget(scroll)
-        body=QWidget();scroll.setWidget(body);v=QVBoxLayout(body)
-        from audio_meter import AudioMeter
-        self.meter=AudioMeter(host);v.addWidget(self.meter)
+        self.setObjectName('InspectorDock');host.addDockWidget(Qt.RightDockWidgetArea,self)
+        self.tabs=QTabWidget();self.setWidget(self.tabs)
+        def page(title):
+            scroll=QScrollArea();scroll.setWidgetResizable(True);body=QWidget();body.setProperty('panel',True);scroll.setWidget(body);layout=QVBoxLayout(body);layout.setContentsMargins(12,12,12,12);layout.setSpacing(9);self.tabs.addTab(scroll,title);return layout
+        v=page('多畫面')
         self.enable=QCheckBox('啟用多畫面（最多 12 個）');v.addWidget(self.enable);self.enable.toggled.connect(self.set_enabled)
         self.edit=QCheckBox('顯示格子拖曳框與尺寸控制');self.edit.setChecked(True);v.addWidget(self.edit);self.edit.toggled.connect(self.editable)
-        self.performance=QCheckBox('多畫面效能模式（直接切換）');self.performance.setChecked(True);v.addWidget(self.performance)
-        self.list=QListWidget();self.list.setMaximumHeight(160);v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
-        row=QHBoxLayout();v.addLayout(row)
-        self.button(row,'＋清單畫面',self.add_playlist);self.button(row,'＋外部擷取',self.add_capture);self.button(row,'移除',self.remove)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'從播放列表選檔',self.replace_media)
+        self.performance=QCheckBox('效能模式（直接切換）');self.performance.setChecked(True);v.addWidget(self.performance)
+        self.list=QListWidget();self.list.setMaximumHeight(160);self.list.setMinimumHeight(80);v.addWidget(self.list);self.list.currentRowChanged.connect(self.select_layer)
+        r=QHBoxLayout();v.addLayout(r);self.button(r,'＋ 畫面',self.add_playlist);self.button(r,'外部擷取',self.add_capture);self.button(r,'移除',self.remove)
+        self.button(v,'從播放列表選檔',self.replace_media)
         self.group=QComboBox();v.addWidget(self.group);self.group.currentIndexChanged.connect(self.change_group)
-        detail=QWidget();detail_layout=QVBoxLayout(detail);detail_layout.setContentsMargins(0,0,0,0)
-        toggle=QPushButton('▸ 尺寸、音量與圖層');toggle.setCheckable(True);v.addWidget(toggle);v.addWidget(detail);detail.hide();toggle.toggled.connect(detail.setVisible)
-        outer=v;v=detail_layout
-        self.controls={}
+        r=QHBoxLayout();v.addLayout(r);self.button(r,'2×2',lambda:self.grid(2,2));self.button(r,'3×2',lambda:self.grid(3,2));self.button(r,'4×3',lambda:self.grid(4,3))
+        self.templates=QComboBox();self.templates.addItems(['左右雙畫面','上下雙畫面','三欄','三列','主畫面＋右側兩格','左上子畫面','右下子畫面','自訂欄列']);v.addWidget(self.templates);self.button(v,'套用版型',self.apply_template);v.addStretch()
+        v=page('尺寸／聲音');self.controls={}
         for key,label,low,high in [('x','左',0,1920),('y','上',0,1080),('w','寬',80,1920),('h','高',45,1080),('gain','畫面音量 %',0,100)]:
-            row=QHBoxLayout();v.addLayout(row);row.addWidget(QLabel(label));spin=QDoubleSpinBox();spin.setRange(low,high);spin.setDecimals(0);row.addWidget(spin);self.controls[key]=spin;spin.valueChanged.connect(self.update_layer)
-        row=QHBoxLayout();v.addLayout(row)
-        self.button(row,'縮小 −10%',lambda:self.scale_selected(.9));self.button(row,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(row,'填滿此格',self.full_bleed)
+            r=QHBoxLayout();v.addLayout(r);r.addWidget(QLabel(label));spin=QDoubleSpinBox();spin.setRange(low,high);spin.setDecimals(0);r.addWidget(spin);self.controls[key]=spin;spin.valueChanged.connect(self.update_layer)
+        r=QHBoxLayout();v.addLayout(r);self.button(r,'縮小 −10%',lambda:self.scale_selected(.9));self.button(r,'放大 ＋10%',lambda:self.scale_selected(1.1));self.button(r,'填滿此格',self.full_bleed)
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
         self.fit=QCheckBox('影像強制鋪滿格子（拉伸）');self.fit.setChecked(True);self.fit.setEnabled(False);v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'移到上層',lambda:self.reorder(1));self.button(row,'移到下層',lambda:self.reorder(-1))
-        v=outer
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'2×2',lambda:self.grid(2,2));self.button(row,'3×2',lambda:self.grid(3,2));self.button(row,'4×3',lambda:self.grid(4,3))
-        self.templates=QComboBox();self.templates.addItems(['左右雙畫面','上下雙畫面','三欄','三列','主畫面＋右側兩格','左上子畫面','右下子畫面','自訂欄列']);v.addWidget(self.templates)
-        self.button(v,'套用版型',self.apply_template)
-        v.addWidget(QLabel('CUE 場景（來源、播放位置、畫布與參數）'))
-        self.scene_list=QComboBox();v.addWidget(self.scene_list)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'記錄 CUE',self.remember);self.button(row,'GO 召回',self.recall);self.button(row,'覆寫',self.overwrite)
-        row=QHBoxLayout();v.addLayout(row);self.button(row,'下一個 GO',self.next_cue);self.button(row,'改名',self.rename_scene);self.button(row,'刪除',self.delete_scene)
-        note=QLabel('畫布像素可從上方設定，支援 4K；投影依目標螢幕實際解析度。CUE GO 會恢復並播放記憶的來源及位置。擷取卡須為系統可識別的攝影機裝置。');note.setWordWrap(True);v.addWidget(note)
+        r=QHBoxLayout();v.addLayout(r);self.button(r,'移到上層',lambda:self.reorder(1));self.button(r,'移到下層',lambda:self.reorder(-1));v.addStretch()
+        playback=QScrollArea();playback.setWidgetResizable(True);playback.setWidget(host.interface.playback_widget);self.tabs.addTab(playback,'播放／輸出')
+        self.scene_list=QComboBox(self);self.scene_list.hide()
         self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(16);self.last=time.monotonic()
         self.refresh_groups();host.screen.scene().selectionChanged.connect(self.scene_selection)
     @property
