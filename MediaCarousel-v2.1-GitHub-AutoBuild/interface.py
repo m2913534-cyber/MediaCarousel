@@ -135,7 +135,9 @@ class Interface:
     def reset(self):self.apply_theme(0);self.apply_layout(0)
     def apply_theme(self,index,save=True):
         if not 0<=index<len(NAMES):index=0
-        self.theme_index=index;p=PALETTES[index];h=self.host
+        self.theme_index=index;p=dict(PALETTES[index]);h=self.host
+        p['check_image']=(Path(__file__).resolve().parent/'assets'/('check-dark.svg' if index in (0,2) else 'check-light.svg')).as_posix()
+        p['check_disabled']=(Path(__file__).resolve().parent/'assets'/'check-disabled.svg').as_posix()
         self.theme_combo.blockSignals(True);self.theme_combo.setCurrentIndex(index);self.theme_combo.blockSignals(False);self.theme_actions[index].setChecked(True)
         css='''
         QMainWindow,QWidget { background: %(bg)s; color: %(text)s; font-family: "Microsoft JhengHei", "PingFang TC", sans-serif; font-size: 13px; }
@@ -168,7 +170,15 @@ class Interface:
         QMenu { background: %(panel)s; border: 1px solid %(line)s; padding: 5px; }
         QMenu::item { padding: 7px 22px; }
         QMenu::item:selected,QMenuBar::item:selected { background: %(raised)s; }
-        QCheckBox { spacing: 6px; background: transparent; }
+        QCheckBox { spacing: 10px; background: transparent; min-height: 28px; padding: 2px 0; }
+        QCheckBox::indicator { width: 20px; height: 20px; border: 2px solid %(dim)s; border-radius: 4px; background: %(bg)s; }
+        QCheckBox::indicator:checked { background: %(accent)s; border-color: %(accent)s; image: url("%(check_image)s"); }
+        QCheckBox::indicator:unchecked:hover,QCheckBox::indicator:unchecked:focus { border-color: %(accent)s; background: %(raised)s; }
+        QCheckBox::indicator:checked:hover,QCheckBox::indicator:checked:focus { border-color: %(text)s; }
+        QCheckBox::indicator:pressed { border-color: %(text)s; }
+        QCheckBox:disabled { color: %(dim)s; }
+        QCheckBox::indicator:disabled { background: %(raised)s; border-color: %(line)s; }
+        QCheckBox::indicator:checked:disabled { image: url("%(check_disabled)s"); }
         QToolTip { color: %(text)s; background: %(panel)s; border: 1px solid %(line)s; padding: 5px; }
         '''%p
         h.setStyleSheet(css)
