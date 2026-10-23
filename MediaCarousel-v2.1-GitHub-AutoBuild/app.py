@@ -50,6 +50,8 @@ class Deck:
         self.audio=QAudioOutput(); self.player=QMediaPlayer();
         from live_audio import LiveAudio
         self.live_audio=LiveAudio(self.audio)
+        from playback_cache import Preroll
+        self.preroll=Preroll(self.player)
         from audio_meter import AudioProbe
         self.probe=AudioProbe(self.player); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
         self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
@@ -59,20 +61,21 @@ class Deck:
     def pdf_ready(self,image,page,count):
         self.image.setPixmap(QPixmap.fromImage(image));self.config['pdf_page']=page;self.relayout(self.fit_mode)
     def remember_frame(self,frame):
-        if frame.isValid():self.last_frame=frame
+        if self.preroll.observe(frame):self.last_frame=frame
     def freeze(self):
         self.player.pause()
         if self.kind=='video' and self.last_frame is not None:
             self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setPos(self.video.pos());self.image.setZValue(self.video.zValue())
             self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.fit_mode);self.image.setOpacity(1);self.image.show()
     def clear(self):
-        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.live_audio.apply(0,False)
+        self.load_generation=getattr(self,'load_generation',0)+1;self.preroll.reset();self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.live_audio.apply(0,False)
     def resume_position(self,generation):
         if generation!=self.load_generation:return
         start,end=clip_bounds(self.config,self.player.duration());target=max(start,min(self.config.pop('_resume_ms',0),max(0,end-1)))
         if target>0:self.player.setPosition(target)
-    def load(self,path,fit,config=None):
-        self.clear(); self.path=path;self.source_ref=config; self.config=dict(config or {}); self.clip_loaded=False
+        self.preroll.positioned_at(target)
+    def load(self,path,fit,config=None,warm=False):
+        self.clear();self.preroll.warming=warm; self.path=path;self.source_ref=config; self.config=dict(config or {}); self.clip_loaded=False
         if is_pdf(self.config):
             self.kind='pdf';self.item=self.image;self.fit_mode=int(fit);self.pdf_source.load(path,self.config.get('pdf_page',0),self.screen.sceneRect().size().toSize())
         elif self.config.get('kind')=='black':
@@ -86,7 +89,11 @@ class Deck:
         else:
             self.kind='video'; self.item=self.video; self.video.setScale(1); self.video.setPos(0,0)
             self.video.setSize(self.screen.sceneRect().size());self.video.setAspectRatioMode(Qt.KeepAspectRatioByExpanding if fit else Qt.KeepAspectRatio)
-            self.player.setSource(QUrl.fromLocalFile(path))
+            url=QUrl.fromLocalFile(path);same=self.player.source()==url
+            if same and self.player.error()!=QMediaPlayer.NoError:self.player.setSource(QUrl());same=False
+            self.player.setSource(url)
+            if same and self.player.duration()>0:
+                self.clip_loaded=True;generation=self.load_generation;QTimer.singleShot(0,lambda:self.resume_position(generation))
         self.relayout(fit);self.item.setOpacity(0); self.item.show()
         self.basepos=self.item.pos(); self.basescale=self.item.scale()
         self.item.setTransformOriginPoint(0,0)
@@ -107,7 +114,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.8｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.9｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -127,6 +134,8 @@ class Window(QMainWindow):
         self.preview_view=Screen();self.preview_view.viewport().setProperty('clean_output',True);self.preview_view.setInteractive(False);self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
         from presentations import PresentationController
         self.presentations=PresentationController(self)
+        from playback_cache import NextVideoCache
+        self.next_cache=NextVideoCache(self)
         self.volume.valueChanged.connect(self.refresh_live_audio)
         self.clip_gain.valueChanged.connect(lambda value:self.live_selected_audio(gain=value))
         self.clip_mute.toggled.connect(lambda value:self.live_selected_audio(mute=value))
@@ -315,6 +324,7 @@ class Window(QMainWindow):
         if hasattr(self,'compositor'):self.compositor.stop()
         self.stop_single()
     def stop_single(self):
+        if hasattr(self,'next_cache'):self.next_cache.discard(self,clear=False)
         self.cue_item=None;self.held=False;self.running=False; self.pending=None; self.transition=None; self.current=None; self.elapsed=0
         for d in self.decks:d.clear()
         self.seek.setValue(0); self.status.setText('已停止')
@@ -325,7 +335,7 @@ class Window(QMainWindow):
         if target is None:
             if self.hold_last.isChecked() and self.current is not None:
                 self.held=True;self.running=False;self.decks[self.active].freeze();self.status.setText('播放結束：停留最後一幀')
-            else:self.stop()
+            else:self.stop();self.status.setText('播放結束：影像已消失')
             return
         p,i=target
         candidate=item_override if item_override is not None else (self.lists[p]['items'][i] if 0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items']) else None)
@@ -335,15 +345,22 @@ class Window(QMainWindow):
         self.held=False
         if item_override is None and not (0<=p<len(self.lists) and 0<=i<len(self.lists[p]['items'])):return
         if self.pending or self.transition:return
+        item=item_override if item_override is not None else self.lists[p]['items'][i]
+        prepared=self.next_cache.take(self,target,item)
         self.current=target;self.cue_item=deepcopy(item_override) if item_override is not None else None
         if item_override is None:self.groups.setCurrentIndex(p);self.files.setCurrentRow(i)
         item=self.current_item(); idx=1-self.active; self.running=True
         self.pending={'index':idx,'started':time.monotonic()}; self.elapsed=0;self.single_editor.sync()
         try:
             if item.get('kind')!='black' and not Path(item['path']).is_file():raise ValueError('找不到檔案')
-            self.decks[idx].load(item['path'],self.fit.currentIndex(),item)
-            if self.decks[idx].kind=='image':self.begin_transition()
-            elif self.decks[idx].kind=='video':self.decks[idx].player.play()
+            d=self.decks[idx]
+            if prepared is d:
+                d.config=dict(item);d.source_ref=item;d.relayout(self.fit.currentIndex());d.item.setOpacity(0);d.item.show();d.preroll.activate()
+                if d.preroll.ready:self.begin_transition()
+            else:
+                d.load(item['path'],self.fit.currentIndex(),item)
+                if d.kind=='image':self.begin_transition()
+                elif d.kind=='video':d.player.play()
         except Exception as e:self.fail(str(e))
     def document_ready(self,index,page,total):
         if self.pending and index==self.pending['index']:self.begin_transition()
@@ -351,13 +368,18 @@ class Window(QMainWindow):
             self.current_item()['pdf_page']=page;self.elapsed=0
         if index==self.active and self.current is not None:self.current_item()['pdf_page']=page
     def first_frame(self,index,frame):
-        if frame.isValid() and self.pending and index==self.pending['index']:QTimer.singleShot(0,self.begin_transition)
+        if frame.isValid() and self.decks[index].preroll.ready and self.pending and index==self.pending['index']:
+            generation=self.decks[index].load_generation
+            QTimer.singleShot(0,lambda:self.begin_video_transition(index,generation))
+    def begin_video_transition(self,index,generation):
+        if self.pending and index==self.pending['index'] and generation==self.decks[index].load_generation:self.begin_transition()
     def media_status(self,index,status):
         d=self.decks[index]
         if status==QMediaPlayer.LoadedMedia and not d.clip_loaded:
             d.clip_loaded=True;generation=d.load_generation;QTimer.singleShot(0,lambda d=d,generation=generation:d.resume_position(generation))
         if status==QMediaPlayer.EndOfMedia and index==self.active and not self.pending and not self.transition and self.running:self.advance()
     def media_error(self,index,message):
+        if self.decks[index].preroll.warming:self.decks[index].preroll.failed=True;return
         if (self.pending and index==self.pending['index']) or (index==self.active and self.current):self.fail(message)
     def fail(self,message):
         if self.current:self.failed.add(self.current)
@@ -401,8 +423,15 @@ class Window(QMainWindow):
         if self.pending or self.transition:return
         if self.cue_item is not None:
             target=following([{'items':[self.cue_item]}],(0,0),self.mode.currentText(),reverse)
+            d=self.decks[self.active]
+            if target is not None and self.effect.currentText()=='直接切換' and d.kind=='video' and not self.held:
+                self.elapsed=0;d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]);d.player.play();return
             item=deepcopy(self.cue_item);item.pop('_resume_ms',None);self.request(target,item_override=item);return
         target=following(self.lists,self.current or (self.group_index(),-1),self.mode.currentText(),reverse)
+        if target==self.current and self.effect.currentText()=='直接切換' and not self.held:
+            d=self.decks[self.active]
+            if d.kind=='video':
+                self.elapsed=0;d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]);d.player.play();return
         self.request(target)
     def tick(self):
         now=time.monotonic(); dt=min(now-self.last,.25); self.last=now
@@ -470,7 +499,7 @@ class Window(QMainWindow):
             screen=screens[labels.index(label)]
             if self.presentations.active:self.presentations.move_output(screen,labels.index(label));return
             self.output_view.showNormal();self.output_view.winId();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
-    def settings(self):return {'canvas_width':int(self.screen.sceneRect().width()),'canvas_height':int(self.screen.sceneRect().height()),'ppt_timings':hasattr(self,'presentations') and self.presentations.timings.isChecked(),'pdf_auto':self.pdf_auto.isChecked(),'hold_last':self.hold_last.isChecked(),'performance':self.compositor.performance.isChecked(),'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
+    def settings(self):return {'canvas_width':int(self.screen.sceneRect().width()),'canvas_height':int(self.screen.sceneRect().height()),'ppt_timings':hasattr(self,'presentations') and self.presentations.timings.isChecked(),'pdf_auto':self.pdf_auto.isChecked(),'end_action':self.end_action.currentData(),'hold_last':self.hold_last.isChecked(),'performance':self.compositor.performance.isChecked(),'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
     def save(self):
         path,_=QFileDialog.getSaveFileName(self,'儲存輪播專案','','輪播專案 (*.mcarousel)')
         if path:
@@ -510,7 +539,7 @@ class Window(QMainWindow):
     def apply_settings(self,s):
         self.pdf_auto.setChecked(s.get('pdf_auto',False))
         if hasattr(self,'presentations'):self.presentations.timings.setChecked(s.get('ppt_timings',False))
-        self.set_canvas(s.get('canvas_width',1920),s.get('canvas_height',1080));self.hold_last.setChecked(s.get('hold_last',True));self.compositor.performance.setChecked(s.get('performance',True))
+        self.set_canvas(s.get('canvas_width',1920),s.get('canvas_height',1080));self.hold_last.setChecked(s.get('end_action','hold' if s.get('hold_last',True) else 'hide')!='hide');self.compositor.performance.setChecked(s.get('performance',True))
         self.mode.setCurrentText(s.get('mode',MODES[0]));self.effect.setCurrentText(s.get('effect',EFFECTS[0]));self.duration.setValue(float(s.get('duration',1)));self.volume.setValue(int(s.get('volume',80)));self.fit.setCurrentIndex(int(s.get('fit',0)));self.output_fit.setCurrentIndex(int(s.get('output_fit',0)))
     def formats(self):
         fmt=QMediaFormat();formats=fmt.supportedFileFormats(QMediaFormat.Decode);codecs=fmt.supportedVideoCodecs(QMediaFormat.Decode)
@@ -529,7 +558,29 @@ if __name__=='__main__':
     if '--build-smoke-test' in sys.argv:
         import json
         report=Path(sys.argv[sys.argv.index('--build-smoke-test')+1])
+        from smoke_media import write_fixture
+        fixture=report.with_suffix('.mp4');write_fixture(fixture)
+        window.session_ready=False
+        if hasattr(window,'session_timer'):window.session_timer.stop()
+        window.stop();window.compositor.enable.setChecked(False)
+        for deck in window.decks:deck.player.setAudioOutput(None)
+        window.lists=[{'name':'Native check','items':[{'path':str(fixture),'seconds':30,'start':1,'end':4} for _ in range(2)]}]
+        window.refresh_groups();window.mode.setCurrentText('清單循環');window.effect.setCurrentText('直接切換');window.request((0,0));smoke_started=time.monotonic()
         def finish_smoke():
+            job=window.next_cache.jobs.get(window)
+            standby=window.decks[job['index']] if job else None
+            ready=bool(standby and standby.preroll.ready)
+            if not ready and time.monotonic()-smoke_started<12:QTimer.singleShot(100,finish_smoke);return
+            preroll_ok=False;finish_ok=False
+            if ready:
+                changes=[];standby.player.sourceChanged.connect(lambda url:changes.append(url))
+                frame=standby.last_frame
+                preroll_ok=standby.audio.volume()==0 and standby.player.playbackState()==QMediaPlayer.PausedState and frame is not None and frame.width()==160 and frame.height()==90 and frame.startTime()>=1000000 and standby.player.hasAudio()
+                window.advance_media();preroll_ok=preroll_ok and window.decks[window.active] is standby and not window.pending and not window.transition and not changes
+                window.end_action.setCurrentIndex(0);window.request(None)
+                finish_ok=window.held and not window.running and standby.image.isVisible() and not standby.image.pixmap().isNull()
+                window.end_action.setCurrentIndex(1);window.request(None)
+                finish_ok=finish_ok and window.current is None and all(not d.video.isVisible() and not d.image.isVisible() for d in window.decks)
             codecs=QMediaFormat().supportedVideoCodecs(QMediaFormat.Decode)
             from PySide6.QtGui import QPdfWriter,QColor
             from PySide6.QtCore import QSize
@@ -546,8 +597,8 @@ if __name__=='__main__':
             import struct
             fmt=QAudioFormat();fmt.setSampleRate(48000);fmt.setChannelCount(2);fmt.setSampleFormat(QAudioFormat.Int16)
             pcm_ok=levels(QAudioBuffer(QByteArray(struct.pack('<hhhh',16384,-8192,-16384,8192)),fmt))[0]==[.5,.25]
-            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok and pcm_ok
-            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok,'pcm_meter':pcm_ok}),encoding='utf-8')
+            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok and pcm_ok and preroll_ok and finish_ok
+            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok,'pcm_meter':pcm_ok,'video_preroll':preroll_ok,'finish_policy':finish_ok}),encoding='utf-8')
             window.close();app.exit(0 if ok else 1)
         QTimer.singleShot(1500,finish_smoke)
     sys.exit(app.exec())

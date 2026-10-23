@@ -31,6 +31,14 @@ def action(menu,text,fn,shortcut=None):
     if shortcut:a.setShortcut(shortcut)
     a.triggered.connect(lambda checked=False:fn());menu.addAction(a);return a
 
+class EndAction(QComboBox):
+    """Explicit choices with compatibility for existing hold_last project values."""
+    def __init__(self):
+        super().__init__();self.addItem('停留最後一幀','hold');self.addItem('消失（清空影像）','hide')
+        self.setToolTip('播放一次的清單或單一 CUE 結束後生效。循環模式仍依原設定繼續播放。多畫面消失時會露出下層畫面。')
+    def isChecked(self):return self.currentData()=='hold'
+    def setChecked(self,value):self.setCurrentIndex(0 if value else 1)
+
 class CuePanel(QWidget):
     def __init__(self,compositor):
         super().__init__();self.c=compositor;self.setProperty('panel',True)
@@ -107,7 +115,7 @@ class Interface:
         h.duration=QDoubleSpinBox();h.duration.setRange(.1,10);h.duration.setValue(1);h.duration.setSuffix(' 秒');form.addRow('轉場時間',h.duration)
         from PySide6.QtWidgets import QCheckBox
         h.pdf_auto=QCheckBox('PDF 每頁自動輪播（依素材秒數）');v.addWidget(h.pdf_auto)
-        h.hold_last=QCheckBox('播放一次結束時停留最後一幀');h.hold_last.setChecked(True);v.addWidget(h.hold_last)
+        h.end_action=h.hold_last=EndAction();form.addRow('播放結束後',h.end_action)
         h.fit=QComboBox();h.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）','強制滿版（拉伸至畫布）']);h.fit.currentIndexChanged.connect(h.refresh_media_fit);form.addRow('單畫面填滿',h.fit)
         h.output_fit=QComboBox();h.output_fit.addItems(['滿螢幕（等比例裁切）','完整畫布（保留黑邊）','延展至螢幕（可能變形）']);h.output_fit.currentIndexChanged.connect(h.refresh_output_fit);form.addRow('投影比例',h.output_fit)
         def launch(fn):self.playback_menu.hide();fn()

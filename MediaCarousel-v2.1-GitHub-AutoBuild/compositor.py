@@ -46,9 +46,11 @@ class MediaDeck:
         self.probe=AudioProbe(self.player);self.audio=QAudioOutput();self.player.setAudioOutput(self.audio);self.player.setVideoOutput(self.video)
         from live_audio import LiveAudio
         self.live_audio=LiveAudio(self.audio)
+        from playback_cache import Preroll
+        self.preroll=Preroll(self.player)
         self.last_frame=None;self.kind='image';self.item=self.image;self.config={};self.ready=False;self.loaded=False
         self.player.mediaStatusChanged.connect(self.status)
-        self.player.errorOccurred.connect(lambda e,m:layer.error(m))
+        self.player.errorOccurred.connect(self.error)
         self.video.videoSink().videoFrameChanged.connect(self.frame)
         self.clear()
     def pdf_ready(self,image,page,total):
@@ -56,19 +58,23 @@ class MediaDeck:
         if self.layer.current and self is self.layer.decks[self.layer.active]:
             self.layer.source_items()[self.layer.current[1]]['pdf_page']=page;self.layer.elapsed=0
     def clear(self):
-        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.live_audio.apply(0,False);self.ready=False;self.loaded=False
+        self.load_generation=getattr(self,'load_generation',0)+1;self.preroll.reset();self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.live_audio.apply(0,False);self.ready=False;self.loaded=False
     def resume_position(self,generation):
         if generation!=self.load_generation:return
         start,end=clip_bounds(self.config,self.player.duration());target=max(start,min(self.config.pop('_resume_ms',0),max(0,end-1)))
         if target>0:self.player.setPosition(target)
+        self.preroll.positioned_at(target)
+    def error(self,code,message):
+        if self.preroll.warming:self.preroll.failed=True
+        else:self.layer.error(message)
     def status(self,status):
         if status==QMediaPlayer.LoadedMedia and not self.loaded:
             self.loaded=True;generation=self.load_generation;QTimer.singleShot(0,lambda generation=generation:self.resume_position(generation))
-        if status==QMediaPlayer.InvalidMedia:self.layer.error('無法解碼此媒體')
+        if status==QMediaPlayer.InvalidMedia:self.error(None,'無法解碼此媒體')
     def frame(self,f):
-        if f.isValid():self.ready=True;self.last_frame=f
-    def load(self,c):
-        self.clear();self.config=deepcopy(c);p=c['path']
+        if self.preroll.observe(f):self.ready=True;self.last_frame=f
+    def load(self,c,warm=False):
+        self.clear();self.preroll.warming=warm;self.config=deepcopy(c);p=c['path']
         if c.get('kind')!='black' and not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
         if is_pdf(c):
             self.kind='pdf';self.item=self.image;self.pdf_source.load(p,c.get('pdf_page',0),QSizeF(self.layer.c['w'],self.layer.c['h']).toSize())
@@ -79,7 +85,12 @@ class MediaDeck:
             if image.isNull():raise ValueError('圖片讀取失敗')
             self.kind='image';self.item=self.image;self.image.setPixmap(QPixmap.fromImage(image));self.ready=True
         else:
-            self.kind='video';self.item=self.video;self.player.setSource(QUrl.fromLocalFile(p));self.player.play()
+            self.kind='video';self.item=self.video;url=QUrl.fromLocalFile(p);same=self.player.source()==url
+            if same and self.player.error()!=QMediaPlayer.NoError:self.player.setSource(QUrl());same=False
+            self.player.setSource(url)
+            if same and self.player.duration()>0:
+                self.loaded=True;generation=self.load_generation;QTimer.singleShot(0,lambda:self.resume_position(generation))
+            self.player.play()
         self.layout();self.item.setOpacity(0);self.item.show()
     def layout(self):
         w,h=self.layer.c['w'],self.layer.c['h']
@@ -160,6 +171,7 @@ class Layer(QGraphicsRectItem):
         if self.capture:self.capture.stop()
         for d in self.decks:d.player.pause()
     def stop(self):
+        if hasattr(self.panel.host,'next_cache'):self.panel.host.next_cache.discard(self,clear=False)
         self.held=False;self.running=False;self.pending=None;self.transition=None;self.current=None
         for d in self.decks:d.clear()
         if self.capture:self.capture.stop()
@@ -175,22 +187,25 @@ class Layer(QGraphicsRectItem):
         if target is None:
             if self.panel.host.hold_last.isChecked() and self.current is not None:
                 self.held=True;self.running=False;self.decks[self.active].freeze()
-            else:self.stop()
+            else:self.stop();self.setBrush(QBrush(Qt.NoBrush))
             return
         if self.pending or self.transition:return
-        self.held=False
+        self.held=False;self.setBrush(QBrush(Qt.black))
         p,i=target
         items=self.source_items()
         if not 0<=i<len(items):self.stop();return
         if is_powerpoint(items[i]):
             host.status.setText('PowerPoint 動畫簡報使用獨立原生輸出，請切回單畫面播放。');self.stop();return
-        initial_load=self.current is None
+        initial_load=self.current is None;prepared=host.next_cache.take(self,target,items[i])
         self.current=target;self.running=True;idx=1-self.active;self.pending=(idx,time.monotonic());self.elapsed=0
         try:
             item=deepcopy(items[i])
             if initial_load and 'cue_position' in self.c:item['_resume_ms']=self.c['cue_position']
-            self.decks[idx].load(item)
-            self.decks[idx].source_ref=items[i]
+            d=self.decks[idx]
+            if prepared is d:
+                d.config=item;d.source_ref=items[i];d.layout();d.item.setOpacity(0);d.item.show();d.preroll.activate()
+            else:d.load(item);d.source_ref=items[i]
+            if prepared is d and d.ready:self.tick(0)
         except Exception as e:self.error(str(e))
     def source_items(self):
         if 'items' in self.c:return self.c['items']
