@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt,QSettings,QTimer,QSize
 from PySide6.QtGui import QAction,QActionGroup,QFont
 from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,
     QPushButton,QLabel,QComboBox,QDoubleSpinBox,QSlider,QListWidget,QListView,QDockWidget,
-    QToolBar,QToolButton,QMenu,QScrollArea,QSizePolicy,QAbstractItemView)
+    QToolBar,QToolButton,QMenu,QScrollArea,QSizePolicy,QAbstractItemView,QWidgetAction)
 from model import MODES,EFFECTS,media_name
 
 NAMES=['導播控台','明亮工作室','舞台演出','精簡工作台']
@@ -92,11 +92,16 @@ class Interface:
         self.edit_button=button(r,'拖曳縮放',h.free_transform);button(r,'一鍵滿版',h.fill_output)
         self.edit_button.setToolTip('開啟八個控制點：左右只調寬度、上下只調高度，四角可自由拉伸。拖曳中央移動；Shift＋滾輪調寬，Alt＋滾輪調高。')
         r=row(v);r.addWidget(QLabel('主音量'));h.volume=QSlider(Qt.Horizontal);h.volume.setRange(0,100);h.volume.setValue(80);h.volume.setMaximumWidth(180);r.addWidget(h.volume)
-        self.volume_label=QLabel('80%');h.volume.valueChanged.connect(lambda n:self.volume_label.setText(str(n)+'%'));r.addWidget(self.volume_label);r.addStretch()
+        self.volume_label=QLabel('80%');h.volume.valueChanged.connect(lambda n:self.volume_label.setText(str(n)+'%'));r.addWidget(self.volume_label)
+        self.playback_button=QToolButton();self.playback_button.setObjectName('PlaybackOutputButton');self.playback_button.setText('播放及輸出 ▾');self.playback_button.setMinimumWidth(128);self.playback_button.setAccessibleName('播放及輸出參數');self.playback_button.setToolTip('調整輪播、轉場、滿版比例、畫布與輸出螢幕。');r.addWidget(self.playback_button);r.addStretch()
         h.status=QLabel('加入媒體後即可播放。Space 播放／暫停 · F11 全螢幕');h.status.setWordWrap(True);h.status.setObjectName('SecondaryLabel');v.addWidget(h.status)
         self.info_timer=QTimer(h);self.info_timer.timeout.connect(self.refresh_info);self.info_timer.start(250)
     def build_playback(self):
-        h=self.host;self.playback_widget,v=panel();form=QFormLayout();v.addLayout(form)
+        h=self.host;self.playback_menu=QMenu(self.playback_button);self.playback_menu.setObjectName('PlaybackOutputMenu')
+        self.playback_scroll=QScrollArea();self.playback_scroll.setWidgetResizable(True);self.playback_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.playback_widget,v=panel();self.playback_widget.setObjectName('PlaybackOutputPanel');self.playback_scroll.setWidget(self.playback_widget)
+        heading=row(v);label=QLabel('播放及輸出');label.setObjectName('PanelHeading');heading.addWidget(label);heading.addStretch();button(heading,'收起',self.playback_menu.hide)
+        form=QFormLayout();form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow);form.setRowWrapPolicy(QFormLayout.WrapLongRows);v.addLayout(form)
         h.mode=QComboBox();h.mode.addItems(MODES);form.addRow('輪播模式',h.mode)
         h.effect=QComboBox();h.effect.addItems(EFFECTS);form.addRow('切換效果',h.effect)
         h.duration=QDoubleSpinBox();h.duration.setRange(.1,10);h.duration.setValue(1);h.duration.setSuffix(' 秒');form.addRow('轉場時間',h.duration)
@@ -105,7 +110,16 @@ class Interface:
         h.hold_last=QCheckBox('播放一次結束時停留最後一幀');h.hold_last.setChecked(True);v.addWidget(h.hold_last)
         h.fit=QComboBox();h.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）','強制滿版（拉伸至畫布）']);h.fit.currentIndexChanged.connect(h.refresh_media_fit);form.addRow('單畫面填滿',h.fit)
         h.output_fit=QComboBox();h.output_fit.addItems(['滿螢幕（等比例裁切）','完整畫布（保留黑邊）','延展至螢幕（可能變形）']);h.output_fit.currentIndexChanged.connect(h.refresh_output_fit);form.addRow('投影比例',h.output_fit)
-        button(v,'畫布像素／4K',h.configure_canvas);button(v,'選擇輸出螢幕',h.choose_output);button(v,'開啟預覽視窗',h.show_preview);v.addStretch()
+        def launch(fn):self.playback_menu.hide();fn()
+        for text,fn in [('畫布像素／4K',h.configure_canvas),('選擇輸出螢幕',h.choose_output),('開啟預覽視窗',h.show_preview)]:button(v,text,lambda fn=fn:launch(fn))
+        v.addStretch()
+        self.playback_action=QWidgetAction(self.playback_menu);self.playback_action.setDefaultWidget(self.playback_scroll);self.playback_menu.addAction(self.playback_action)
+        self.playback_button.setMenu(self.playback_menu);self.playback_button.setPopupMode(QToolButton.InstantPopup);self.playback_menu.aboutToShow.connect(self.size_playback_menu)
+    def size_playback_menu(self):
+        # Anchor beside master volume without changing the preview's geometry.
+        screen=QApplication.screenAt(self.playback_button.mapToGlobal(self.playback_button.rect().center())) or self.playback_button.screen()
+        self.playback_widget.ensurePolished();available=screen.availableGeometry();width=min(450,max(240,available.width()-32));height=min(560,max(180,available.height()-80),self.playback_widget.sizeHint().height())
+        self.playback_scroll.setFixedSize(width,height)
     def build_chrome(self):
         h=self.host;project=h.menuBar().addMenu('專案')
         action(project,'開啟專案…',h.open_project,'Ctrl+O');action(project,'儲存專案…',h.save,'Ctrl+S');project.addSeparator();action(project,'格式與解碼資訊',h.formats)

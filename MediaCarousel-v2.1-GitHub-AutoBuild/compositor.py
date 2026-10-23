@@ -300,7 +300,6 @@ class Compositor(QDockWidget):
         self.mute=QCheckBox('此畫面靜音');v.addWidget(self.mute);self.mute.toggled.connect(self.update_layer)
         self.fit=QCheckBox('影像強制鋪滿格子（拉伸）');self.fit.setChecked(True);self.fit.setEnabled(False);v.addWidget(self.fit);self.fit.toggled.connect(self.update_layer)
         r=QHBoxLayout();v.addLayout(r);self.button(r,'移到上層',lambda:self.reorder(1));self.button(r,'移到下層',lambda:self.reorder(-1));v.addStretch()
-        playback=QScrollArea();playback.setWidgetResizable(True);playback.setWidget(host.interface.playback_widget);self.tabs.addTab(playback,'播放／輸出')
         self.scene_list=QComboBox(self);self.scene_list.hide()
         self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(16);self.last=time.monotonic()
         self.refresh_groups();host.screen.scene().selectionChanged.connect(self.scene_selection)
