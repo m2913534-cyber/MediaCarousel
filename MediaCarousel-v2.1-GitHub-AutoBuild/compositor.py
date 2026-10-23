@@ -44,6 +44,8 @@ class MediaDeck:
         self.player=QMediaPlayer();
         from audio_meter import AudioProbe
         self.probe=AudioProbe(self.player);self.audio=QAudioOutput();self.player.setAudioOutput(self.audio);self.player.setVideoOutput(self.video)
+        from live_audio import LiveAudio
+        self.live_audio=LiveAudio(self.audio)
         self.last_frame=None;self.kind='image';self.item=self.image;self.config={};self.ready=False;self.loaded=False
         self.player.mediaStatusChanged.connect(self.status)
         self.player.errorOccurred.connect(lambda e,m:layer.error(m))
@@ -54,7 +56,7 @@ class MediaDeck:
         if self.layer.current and self is self.layer.decks[self.layer.active]:
             self.layer.source_items()[self.layer.current[1]]['pdf_page']=page;self.layer.elapsed=0
     def clear(self):
-        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.audio.setVolume(0);self.audio.setMuted(False);self.ready=False;self.loaded=False
+        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop();self.video.hide();self.image.hide();self.live_audio.apply(0,False);self.ready=False;self.loaded=False
     def resume_position(self,generation):
         if generation!=self.load_generation:return
         start,end=clip_bounds(self.config,self.player.duration());target=max(start,min(self.config.pop('_resume_ms',0),max(0,end-1)))
@@ -124,7 +126,9 @@ class Layer(QGraphicsRectItem):
             if self.isSelected():self.panel.sync_controls()
         return super().itemChange(change,value)
     def resize_to(self,w,h):
-        self.c['fit']=True;self.c['w'],self.c['h']=w,h;self.setRect(0,0,w,h);self.handle.setPos(w-22,h-22)
+        self.c['fit']=True;self.c['w'],self.c['h']=w,h
+        if self.rect()==QRectF(0,0,w,h):return
+        self.setRect(0,0,w,h);self.handle.setPos(w-22,h-22)
         for d in self.decks:d.layout()
         if hasattr(self,'capture_video'):self.capture_video.setSize(QSizeF(w,h));self.capture_video.setAspectRatioMode(Qt.IgnoreAspectRatio)
     def editable(self,enabled):
@@ -142,7 +146,7 @@ class Layer(QGraphicsRectItem):
             if effect=='直接切換':ag,bg=0,1
             envelopes[old],envelopes[new]=ag,bg
         elif self.current is not None:envelopes[self.active]=1
-        for i,d in enumerate(self.decks):d.audio.setMuted(bool(self.c.get('mute') or d.config.get('mute')));d.audio.setVolume(envelopes[i]*self.gain()*d.gain())
+        for i,d in enumerate(self.decks):d.live_audio.apply(envelopes[i]*self.gain()*d.gain(),self.c.get('mute') or d.config.get('mute'))
     def start(self):
         if self.c['kind']!='playlist':self.start_capture();return
         self.running=True
@@ -246,9 +250,9 @@ class Layer(QGraphicsRectItem):
             self.elapsed+=dt
             if self.elapsed>=d.config.get('seconds',5):self.advance()
         else:
-            start,end=clip_bounds(d.config,d.player.duration())
-            if d.player.mediaStatus()==QMediaPlayer.EndOfMedia or (end and d.player.position()>=end):self.advance()
-            elif not self.panel.performance.isChecked() and end and end-start>host.duration.value()*2000 and 0<end-d.player.position()<=host.duration.value()*1000 and host.effect.currentText()!='直接切換':
+            start,end=clip_bounds(d.config,d.player.duration());position=d.player.position()
+            if d.player.mediaStatus()==QMediaPlayer.EndOfMedia or (end and position>=end):self.advance()
+            elif not self.panel.performance.isChecked() and end and end-start>host.duration.value()*2000 and 0<end-position<=host.duration.value()*1000 and host.effect.currentText()!='直接切換':
                 if self.next_target() not in (None,self.current):self.advance()
     def start_capture(self):
         self.stop();kind=self.c['kind'];host=self.panel.host

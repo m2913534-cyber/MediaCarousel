@@ -1,5 +1,6 @@
 """Decoded PCM sample-peak/RMS meter for the selected playback source (not system mix)."""
-import math,time,array,sys
+import math,time
+import numpy as np
 from PySide6.QtCore import Qt,QTimer,QRectF
 from PySide6.QtGui import QPainter,QColor,QFont
 from PySide6.QtWidgets import QWidget
@@ -7,14 +8,18 @@ from PySide6.QtMultimedia import QAudioBufferOutput,QAudioFormat,QMediaPlayer
 
 def levels(buffer):
     fmt=buffer.format();channels=fmt.channelCount()
-    specs={QAudioFormat.UInt8:('B',128,128),QAudioFormat.Int16:('h',32768,0),QAudioFormat.Int32:('i',2147483648,0),QAudioFormat.Float:('f',1,0)}
+    specs={QAudioFormat.UInt8:(np.uint8,128,128),QAudioFormat.Int16:(np.int16,32768,0),QAudioFormat.Int32:(np.int32,2147483648,0),QAudioFormat.Float:(np.float32,1,0)}
     spec=specs.get(fmt.sampleFormat())
     if not spec or not channels or not buffer.isValid():return [0,0],[0,0]
-    code,scale,offset=spec;data=array.array(code);data.frombytes(bytes(buffer.constData())[:buffer.byteCount()])
-    peaks=[];rms=[]
-    for ch in range(min(2,channels)):
-        values=[abs((v-offset)/scale) for v in data[ch::channels]]
-        peaks.append(max(values,default=0));rms.append(math.sqrt(sum(v*v for v in values)/max(1,len(values))))
+    dtype,scale,offset=spec
+    # Read every L/R sample directly from the live buffer; do not copy PCM bytes,
+    # subsample, or alter the audio sent to the player. Float64 matches the old
+    # Python arithmetic, including the negative full-scale integer endpoints.
+    data=np.frombuffer(buffer.constData(),dtype=dtype,count=buffer.sampleCount())
+    if not data.size:return [0,0],[0,0]
+    values=data.reshape(-1,channels)[:,:min(2,channels)].astype(np.float64)
+    values-=offset;values/=scale;np.abs(values,out=values)
+    peaks=values.max(axis=0).tolist();rms=np.sqrt(np.mean(values*values,axis=0)).tolist()
     if channels==1:peaks*=2;rms*=2
     return peaks,rms
 

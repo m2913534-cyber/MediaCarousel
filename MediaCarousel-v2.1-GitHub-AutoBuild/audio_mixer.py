@@ -37,15 +37,20 @@ class ChannelStrip(QWidget):
         self.percent=QLabel();self.percent.setObjectName('SecondaryLabel');self.percent.setAlignment(Qt.AlignCenter);v.addWidget(self.percent)
         self.mute=QPushButton('MUTE · 靜音');self.mute.setObjectName('ChannelMute');self.mute.setCheckable(True);self.mute.setToolTip('即時靜音／解除靜音，保持影片目前播放位置。');v.addWidget(self.mute)
         self.slider.setAccessibleName('影片音量推桿');self.mute.setAccessibleName('影片即時靜音')
+        self.slider.setToolTip('素材音量；主音量與格子音量仍會共同作用。');self._presentation=None
         self.slider.valueChanged.connect(lambda value:mixer.set_audio(self.binding,gain=fader_gain(value)));self.slider.sliderReleased.connect(mixer.host.persist_session)
         self.mute.toggled.connect(lambda value:mixer.set_audio(self.binding,mute=value,persist=True));self.refresh()
     def refresh(self):
         b=self.binding;gain=number(b.deck.config.get('gain',100),100,0,100);db=20*math.log10(gain/100) if gain>0 else None
-        self.channel.setText(b.label);name=media_name(b.deck.config);self.name.setText(self.name.fontMetrics().elidedText(name,Qt.ElideMiddle,94));self.name.setToolTip(b.deck.config.get('path',name))
-        self.readout.setText(f'{db:.1f} dB' if db is not None else '−∞ dB');self.percent.setText(f'{gain:.1f}%')
-        self.slider.setToolTip('素材音量；主音量與格子音量仍會共同作用。')
-        if not self.slider.isSliderDown():self.slider.blockSignals(True);self.slider.setValue(gain_fader(gain));self.slider.blockSignals(False)
-        self.mute.blockSignals(True);self.mute.setChecked(b.muted);self.mute.blockSignals(False)
+        name=media_name(b.deck.config);presentation=(b.label,name,b.deck.config.get('path',name),gain,self.name.font().key())
+        if presentation!=self._presentation:
+            self.channel.setText(b.label);self.name.setText(self.name.fontMetrics().elidedText(name,Qt.ElideMiddle,94));self.name.setToolTip(presentation[2])
+            self.readout.setText(f'{db:.1f} dB' if db is not None else '−∞ dB');self.percent.setText(f'{gain:.1f}%');self._presentation=presentation
+        target=gain_fader(gain)
+        if not self.slider.isSliderDown() and self.slider.value()!=target:
+            blocked=self.slider.blockSignals(True);self.slider.setValue(target);self.slider.blockSignals(blocked)
+        if self.mute.isChecked()!=b.muted:
+            blocked=self.mute.blockSignals(True);self.mute.setChecked(b.muted);self.mute.blockSignals(blocked)
 
 class AudioMixer(QWidget):
     contentChanged=Signal()
@@ -80,12 +85,13 @@ class AudioMixer(QWidget):
             if b.key not in self.strips:
                 strip=ChannelStrip(self,b);self.strips[b.key]=strip;self.channels.insertWidget(index,strip)
             strip=self.strips[b.key];strip.binding=b;strip.refresh()
-        self.scroll.setMinimumWidth(230 if len(bindings)>1 else 145)
+        width=230 if len(bindings)>1 else 145
+        if self.scroll.minimumWidth()!=width:self.scroll.setMinimumWidth(width)
         if bindings:
             if not had_channels:self.contentChanged.emit()
-            self.show()
+            if self.isHidden():self.show()
         else:
-            self.hide()
+            if not self.isHidden():self.hide()
             if had_channels:self.contentChanged.emit()
     def set_audio(self,binding,gain=None,mute=None,persist=False):
         # A stale queued UI event must never alter a reused deck's next source.

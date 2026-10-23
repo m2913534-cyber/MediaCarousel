@@ -1,4 +1,4 @@
-MediaCarousel 2.6 — Mac 桌面版
+MediaCarousel 2.7 — Mac 桌面版
 
 選擇版本
 Apple Silicon：適用 M 系列晶片，包含 M3 Max。
@@ -25,6 +25,7 @@ xattr -dr com.apple.quarantine "/Applications/MediaCarousel.app"
 
 功能範圍
 Mac 版支援圖片、影片、PDF、播放列表、多畫面、場景 CUE、畫布尺寸與自由寬高調整。
-2.6 的 PowerPoint 原生動畫／音效自動化整合限 Windows 桌面版；Mac 可先將簡報另存 PDF 或影片後加入播放。
+2.7 的 PowerPoint 原生動畫／音效自動化整合限 Windows 桌面版；Mac 可先將簡報另存 PDF 或影片後加入播放。
 
-本版新增右側直立 FADER，只列出含音軌的播放影片；靜音與音量即時生效，保持播放位置。多畫面各格獨立操作，並可存入 CUE。
+本版優化播放期間的音訊與介面負擔，保留原始影片解析度、幀率與既有顯示品質。
+右側直立 FADER，只列出含音軌的播放影片；靜音與音量即時生效，保持播放位置。多畫面各格獨立操作，並可存入 CUE。

@@ -48,6 +48,8 @@ class Deck:
         self.screen=screen;self.root=QGraphicsRectItem(screen.canvas_root);self.root.setPen(QPen(Qt.NoPen));self.last_frame=None;self.video=QGraphicsVideoItem(self.root); self.video.setSize(QSizeF(1920,1080))
         self.image=QGraphicsPixmapItem(self.root)
         self.audio=QAudioOutput(); self.player=QMediaPlayer();
+        from live_audio import LiveAudio
+        self.live_audio=LiveAudio(self.audio)
         from audio_meter import AudioProbe
         self.probe=AudioProbe(self.player); self.player.setAudioOutput(self.audio); self.player.setVideoOutput(self.video)
         self.video.videoSink().videoFrameChanged.connect(self.remember_frame)
@@ -64,7 +66,7 @@ class Deck:
             self.image.setPixmap(QPixmap.fromImage(self.last_frame.toImage()));self.image.setPos(self.video.pos());self.image.setZValue(self.video.zValue())
             self.kind='image';self.item=self.image;self.video.hide();self.relayout(self.fit_mode);self.image.setOpacity(1);self.image.show()
     def clear(self):
-        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.audio.setVolume(0);self.audio.setMuted(False)
+        self.load_generation=getattr(self,'load_generation',0)+1;self.source_ref=None;self.pdf_source.close();self.last_frame=None;self.player.stop(); self.video.hide(); self.image.hide(); self.live_audio.apply(0,False)
     def resume_position(self,generation):
         if generation!=self.load_generation:return
         start,end=clip_bounds(self.config,self.player.duration());target=max(start,min(self.config.pop('_resume_ms',0),max(0,end-1)))
@@ -105,7 +107,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.6｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.7｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -200,7 +202,7 @@ class Window(QMainWindow):
             envelopes[tr['old']],envelopes[tr['new']]=old,new
         elif self.current is not None:envelopes[self.active]=1
         for i,d in enumerate(self.decks):
-            d.audio.setMuted(bool(d.config.get('mute')));d.audio.setVolume(envelopes[i]*self.volume.value()/100*self.deck_gain(d))
+            d.live_audio.apply(envelopes[i]*self.volume.value()/100*self.deck_gain(d),d.config.get('mute'))
     def show_preview(self):
         self.preview_view.show();self.preview_view.raise_();self.preview_view.refit()
     def media_menu(self,pos):
@@ -425,11 +427,11 @@ class Window(QMainWindow):
         else:
             if d.player.mediaStatus()==QMediaPlayer.EndOfMedia:
                 self.advance();return
-            start,end=clip_bounds(d.config,d.player.duration());duration=end-start
-            fraction=(d.player.position()-start)/duration if duration else 0
-            if end and d.player.position()>=end:self.advance();return
+            start,end=clip_bounds(d.config,d.player.duration());duration=end-start;position=d.player.position()
+            fraction=(position-start)/duration if duration else 0
+            if end and position>=end:self.advance();return
             # Start overlap only near the end; short videos use their end-of-media event.
-            remaining=end-d.player.position()
+            remaining=end-position
             if duration>self.duration.value()*2000 and 0<remaining<=self.duration.value()*1000 and self.effect.currentText()!='直接切換':
                 if self.cue_item is not None:
                     if self.mode.currentText()!='播放一次':self.advance()
@@ -538,8 +540,14 @@ if __name__=='__main__':
             if sys.platform=='win32':
                 try:import pythoncom,win32com.client
                 except Exception:bridge_ok=False
-            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok
-            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok}),encoding='utf-8')
+            from audio_meter import levels
+            from PySide6.QtMultimedia import QAudioBuffer,QAudioFormat
+            from PySide6.QtCore import QByteArray
+            import struct
+            fmt=QAudioFormat();fmt.setSampleRate(48000);fmt.setChannelCount(2);fmt.setSampleFormat(QAudioFormat.Int16)
+            pcm_ok=levels(QAudioBuffer(QByteArray(struct.pack('<hhhh',16384,-8192,-16384,8192)),fmt))[0]==[.5,.25]
+            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok and pcm_ok
+            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok,'pcm_meter':pcm_ok}),encoding='utf-8')
             window.close();app.exit(0 if ok else 1)
         QTimer.singleShot(1500,finish_smoke)
     sys.exit(app.exec())
