@@ -27,3 +27,7 @@
 若某個建置顯示紅色叉號，點進失敗步驟，複製錯誤訊息給我。我會修正對應設定。不要只下載原始碼（Code → Download ZIP）；執行檔在 Actions → 執行紀錄 → Artifacts。
 
 沒有自動發佈公開 Release。Artifacts 設定保留 30 天；到期可重新執行工作流程。
+
+## v2.10 Mac PowerPoint
+
+Mac 已加入桌面版 PowerPoint 原生放映整合，可由 PowerPoint 處理其支援的動畫與音效。需要已安裝並啟用 PowerPoint，且允許 macOS 自動化與輔助使用。詳見 `README-Mac-zh-TW.txt` 與 `UPDATE-2.10.md`；Mac 輸出螢幕、換頁時間由 PowerPoint 設定，CUE 保存頁碼，不保證動畫步數還原。建置環境沒有 Office，實際動畫／音效尚需實機確認。

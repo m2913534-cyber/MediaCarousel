@@ -250,7 +250,9 @@ class Interface:
         h=self.host;r=h.screen.sceneRect();self.canvas_label.setText(f'{int(r.width())} × {int(r.height())}')
         if not hasattr(h,'compositor'):return
         if hasattr(h,'presentations') and h.presentations.active:
-            state=h.presentations.native_state;self.source_label.setText('PowerPoint · '+media_name(h.current_item()));self.time_label.setText(f"投影片 {state.get('slide',1)} / {state.get('total',1)} · 動畫 {state.get('click',0)}");return
+            state=h.presentations.native_state;self.source_label.setText('PowerPoint · '+media_name(h.current_item()))
+            animation=f"動畫 {state.get('click',0)}" if state.get('click_supported',True) else '原生動畫'
+            self.time_label.setText(f"投影片 {state.get('slide',1)} / {state.get('total',1)} · {animation}");return
         if h.compositor.enabled:
             l=h.compositor.selected()
             d=l.decks[l.active] if l and l.c['kind']=='playlist' else None

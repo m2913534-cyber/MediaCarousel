@@ -1,9 +1,10 @@
 """Presentation routing, native PowerPoint lifecycle and presenter keyboard input."""
 from copy import deepcopy
+import sys
 from pathlib import Path
 from PySide6.QtCore import QObject,QEvent,QTimer,Qt
 from PySide6.QtWidgets import (QApplication,QWidget,QHBoxLayout,QLabel,QPushButton,QSpinBox,
-    QCheckBox,QLineEdit,QAbstractSpinBox,QComboBox,QTextEdit,QPlainTextEdit,QGraphicsRectItem)
+    QCheckBox,QLineEdit,QAbstractSpinBox,QComboBox,QTextEdit,QPlainTextEdit,QGraphicsRectItem,QMessageBox)
 from PySide6.QtGui import QPen,QAction
 from model import is_pdf,is_powerpoint,media_name
 from powerpoint import PowerPointWorker,powerpoint_available
@@ -28,6 +29,9 @@ class PresentationController(QObject):
         toggle=QAction('啟用簡報筆按鍵',host);toggle.setCheckable(True);toggle.setChecked(self.pen.isChecked());toggle.toggled.connect(self.pen.setChecked);self.pen.toggled.connect(toggle.setChecked);menu.addAction(toggle)
         a=QAction('從列表播放所選簡報',host);a.triggered.connect(host.play_selected);menu.addAction(a)
         self.timings=QAction('PPT 使用原有自動換頁時間',host);self.timings.setCheckable(True);menu.addAction(self.timings)
+        if sys.platform=='darwin':
+            self.timings.setText('Mac PPT 換頁時間：沿用 PowerPoint 設定');self.timings.setEnabled(False)
+            help_action=QAction('Mac PowerPoint 首次設定說明',host);help_action.triggered.connect(self.mac_help);menu.addAction(help_action)
         for text,fn in [('上一頁／步驟',lambda:self.step(True)),('下一頁／步驟',lambda:self.step(False)),('第一頁',lambda:self.command('first')),('最後一頁',lambda:self.command('last')),('黑畫面',self.toggle_black),('結束簡報',self.exit)]:
             a=QAction(text,host);a.triggered.connect(fn);menu.addAction(a)
         QApplication.instance().installEventFilter(self)
@@ -48,7 +52,8 @@ class PresentationController(QObject):
         deck=self.pdf_deck();self.controls.setVisible(self.active or deck is not None or self.starting)
         if self.active:
             state=self.native_state;self.label.setText('PPT · 原生音效');page,count=state.get('slide',1),state.get('total',1)
-            self.notice.setGeometry(self.host.screen.viewport().rect());self.notice.setText(f"PowerPoint 原生輸出\n{media_name(self.host.current_item())}\n投影片 {page} / {count} · 動畫步驟 {state.get('click',0)}\n音效由 PowerPoint／系統音量控制")
+            animation=f"動畫步驟 {state.get('click',0)}" if state.get('click_supported',True) else '動畫由 PowerPoint 控制'
+            self.notice.setGeometry(self.host.screen.viewport().rect());self.notice.setText(f"PowerPoint 原生輸出\n{media_name(self.host.current_item())}\n投影片 {page} / {count} · {animation}\n音效由 PowerPoint／系統音量控制")
         elif deck:
             self.label.setText('PDF');page,count=deck.pdf_source.page+1,deck.pdf_source.count
             if not self.host.seek.isSliderDown():self.host.seek.setValue(round((page-1)/max(1,count-1)*1000))
@@ -59,6 +64,8 @@ class PresentationController(QObject):
         self.overlay.setRect(self.host.screen.canvas_root.rect())
     def detect(self):
         ok,message=powerpoint_available();self.host.status.setText(message);return ok
+    def mac_help(self):
+        QMessageBox.information(self.host,'Mac PowerPoint 設定','1. 安裝並啟用 Mac 桌面版 Microsoft PowerPoint。\n2. 首次播放時允許 MediaCarousel 的自動化控制。\n3. 系統設定 → 隱私權與安全性 → 自動化，允許控制 PowerPoint 與 System Events；在輔助使用允許 MediaCarousel。\n4. PPT 的投影螢幕與原有換頁時間，請在 PowerPoint 的投影片放映設定。\n\n下一步會觸發原生動畫或換頁；簡報筆在 PowerPoint 前景可直接操作。Mac CUE 保存頁碼，動畫步驟由 PowerPoint 控制。')
     def start_native(self,target,item,override=False):
         h=self.host
         if h.compositor.enabled:h.status.setText('PowerPoint 動畫簡報使用獨立原生輸出，請切回單畫面。');return
@@ -77,11 +84,15 @@ class PresentationController(QObject):
         override=override or not (0<=p<len(h.lists) and 0<=i<len(h.lists[p]['items']) and h.lists[p]['items'][i].get('path')==item['path'])
         h.stop_single();self.starting=False;self.active=True;h.current=target;h.cue_item=deepcopy(item) if override else None
         if not override:h.groups.setCurrentIndex(target[0]);h.files.setCurrentRow(target[1])
-        h.running=True;h.output_view.hide();self.notice.show();self.native_progress(state);h.status.setText('PowerPoint 原生放映已啟動；可用簡報筆或簡報控制列操作。')
+        h.running=True;h.output_view.hide();self.notice.show();self.native_progress(state);h.status.setText(state.get('warning') or 'PowerPoint 原生放映已啟動；可用簡報筆或簡報控制列操作。')
     def native_progress(self,state):
         if state.get('_token')!=self.generation or not self.active:return
         self.native_state=state
-        if self.host.current is not None:self.host.current_item().update(ppt_slide=state['slide'],ppt_click=state.get('click',0))
+        if self.host.current is not None:
+            item=self.host.current_item();item['ppt_slide']=state['slide']
+            if state.get('click_supported',True):item['ppt_click']=state.get('click',0)
+            else:item.pop('ppt_click',None)
+        if state.get('warning'):self.host.status.setText(state['warning'])
         self.refresh()
     def native_ended(self,token):
         if token!=self.generation:return
@@ -118,6 +129,8 @@ class PresentationController(QObject):
         if self.active:self.worker.submit('black');return
         if self.pdf_deck() is not None:self.black=not self.black;self.overlay.setRect(self.host.screen.canvas_root.rect());self.overlay.setVisible(self.black)
     def move_output(self,screen,index):
+        if self.active and self.native_state.get('manual_output'):
+            self.host.status.setText('Mac PPT 的輸出螢幕請在 PowerPoint 的投影片放映／監視器設定。');return
         self.host.output_view.winId();self.host.output_view.windowHandle().setScreen(screen)
         if self.active:self.worker.submit('move',{'screen_name':screen.name(),'index':index})
     def exit(self):

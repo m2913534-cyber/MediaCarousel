@@ -114,7 +114,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.9｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.10｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -588,17 +588,21 @@ if __name__=='__main__':
             pdfpath=report.with_suffix('.pdf');writer=QPdfWriter(str(pdfpath));painter=QPainter(writer);painter.fillRect(0,0,writer.width(),writer.height(),QColor('green'));painter.end();del writer
             pdf=QPdfDocument();error=pdf.load(str(pdfpath));pdf_ok=error==QPdfDocument.Error.None_ and not pdf.render(0,QSize(80,80)).isNull();pdf.close()
             bridge_ok=True
+            mac_bridge_ok=True
             if sys.platform=='win32':
                 try:import pythoncom,win32com.client
                 except Exception:bridge_ok=False
+            elif sys.platform=='darwin':
+                from powerpoint_mac import verify_mac_bridge
+                mac_bridge_ok=verify_mac_bridge()
             from audio_meter import levels
             from PySide6.QtMultimedia import QAudioBuffer,QAudioFormat
             from PySide6.QtCore import QByteArray
             import struct
             fmt=QAudioFormat();fmt.setSampleRate(48000);fmt.setChannelCount(2);fmt.setSampleFormat(QAudioFormat.Int16)
             pcm_ok=levels(QAudioBuffer(QByteArray(struct.pack('<hhhh',16384,-8192,-16384,8192)),fmt))[0]==[.5,.25]
-            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok and pcm_ok and preroll_ok and finish_ok
-            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok,'pcm_meter':pcm_ok,'video_preroll':preroll_ok,'finish_policy':finish_ok}),encoding='utf-8')
+            ok=window.isVisible() and bool(QApplication.screens()) and bool(codecs) and pdf_ok and bridge_ok and pcm_ok and preroll_ok and finish_ok and mac_bridge_ok
+            report.write_text(json.dumps({'ok':ok,'video_codecs':len(codecs),'pdf':pdf_ok,'powerpoint_bridge':bridge_ok,'mac_ppt_bridge':mac_bridge_ok,'mac_office_live_tested':False,'pcm_meter':pcm_ok,'video_preroll':preroll_ok,'finish_policy':finish_ok}),encoding='utf-8')
             window.close();app.exit(0 if ok else 1)
         QTimer.singleShot(1500,finish_smoke)
     sys.exit(app.exec())

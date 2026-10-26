@@ -52,6 +52,11 @@ with tempfile.TemporaryDirectory() as folder:
   w.request((0,1));token=w.presentations.generation
   w.presentations.native_opened({'_token':token,'slide':1,'total':3,'click':0,'clicks':2,'state':1});assert w.presentations.active
   w.advance();assert calls[-1][0]=='next';native_cue=c.capture_cue('原生PPT');assert native_cue['single']['media']['ppt_slide']==1
+  # Mac exposes page state while leaving unobservable animation indices unknown.
+  w.presentations.native_progress({'_token':token,'slide':2,'total':3,'click':None,'clicks':None,'state':1,'click_supported':False,'manual_output':True})
+  w.interface.refresh_info();assert 'None' not in w.presentations.notice.text() and 'None' not in w.interface.time_label.text()
+  assert 'ppt_click' not in w.current_item() and c.capture_cue('Mac 頁碼')['single']['media']['ppt_slide']==2
+  before_calls=len(calls);w.presentations.move_output(app.primaryScreen(),0);assert len(calls)==before_calls and w.presentations.active
   c.enable.setChecked(True);assert not w.presentations.active and w.current is None
   c.enable.setChecked(False)
   # An asynchronous Office open must survive list edits without an invalid index.

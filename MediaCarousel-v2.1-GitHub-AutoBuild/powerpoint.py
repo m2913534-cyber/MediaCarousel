@@ -4,7 +4,10 @@ from pathlib import Path
 from PySide6.QtCore import QThread,Signal
 
 def powerpoint_available():
-    if sys.platform!='win32':return False,'PowerPoint 原生整合目前支援 Windows；PDF 可直接播放。'
+    if sys.platform=='darwin':
+        from powerpoint_mac import mac_powerpoint_available
+        return mac_powerpoint_available()
+    if sys.platform!='win32':return False,'PowerPoint 原生整合支援 Windows 與 Mac；PDF 可直接播放。'
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT,r'PowerPoint.Application\CLSID'):pass
@@ -88,17 +91,18 @@ class PowerPointWorker(QThread):
     def submit(self,name,value=None):
         if name=='start':self.latest_start=value.get('_token',0)
         elif name in ('stop','shutdown'):self.latest_start=None
-        self.commands.put((name,value))
+        self.commands.put((name,value,self.latest_start))
         if not self.isRunning():self.start()
     def run(self):
-        if sys.platform!='win32':self.failed.emit(0,'PowerPoint 原生整合目前僅支援 Windows');return
+        if sys.platform=='darwin':self.run_mac();return
+        if sys.platform!='win32':self.failed.emit(self.latest_start or 0,'PowerPoint 原生整合支援 Windows 與 Mac');return
         import pythoncom
         pythoncom.CoInitialize();session=None;token=0
         try:
             import win32com.client
             while True:
-                try:name,value=self.commands.get(timeout=.1)
-                except queue.Empty:name,value=None,None
+                try:name,value,issued_token=self.commands.get(timeout=.1)
+                except queue.Empty:name,value,issued_token=None,None,None
                 if name=='shutdown':break
                 try:
                     if name=='start':
@@ -110,7 +114,9 @@ class PowerPointWorker(QThread):
                     elif name=='stop':
                         if session:session.close();session=None
                         self.ended.emit(token)
-                    elif name and session:session.command(name,value)
+                    elif name and session:
+                        if issued_token!=token or issued_token!=self.latest_start:continue
+                        session.command(name,value)
                     pythoncom.PumpWaitingMessages()
                     if session:
                         try:
@@ -122,7 +128,7 @@ class PowerPointWorker(QThread):
                             session.close();session=None;self.ended.emit(token)
                 except Exception as e:
                     if getattr(e,'hresult',0) in (-2147418111,-2147417846):
-                        if name:self.commands.put((name,value))
+                        if name:self.commands.put((name,value,issued_token))
                         time.sleep(.05);continue
                     if session:session.close();session=None
                     self.failed.emit(token,'PowerPoint 放映失敗：'+str(e)+'；請確認桌面版已啟用，且檔案可在 PowerPoint 正常放映。')
@@ -130,7 +136,47 @@ class PowerPointWorker(QThread):
         finally:
             if session:session.close()
             pythoncom.CoUninitialize()
+    def run_mac(self):
+        from powerpoint_mac import MacPowerPointSession,AutomationCancelled,AutomationBusy,AutomationInputBlocked
+        session=None;token=0;last_poll=0
+        try:
+            while True:
+                try:name,value,issued_token=self.commands.get(timeout=.1)
+                except queue.Empty:name,value,issued_token=None,None,None
+                if name=='shutdown':break
+                try:
+                    state=None
+                    if name=='start':
+                        request=dict(value);token=request.pop('_token',0)
+                        if token!=self.latest_start:continue
+                        if session:session.close()
+                        session=MacPowerPointSession(cancelled=lambda token=token:self.latest_start!=token)
+                        state=session.start(**request)
+                        if token==self.latest_start:state['_token']=token;self.opened.emit(state)
+                    elif name=='stop':
+                        if session:session.close();session=None
+                        self.ended.emit(token)
+                    elif name and session:
+                        if issued_token!=token or issued_token!=self.latest_start:continue
+                        state=session.command(name,value)
+                    if session and token==self.latest_start:
+                        if state is None and time.monotonic()-last_poll>=.5:state=session.state()
+                        if state is not None:
+                            last_poll=time.monotonic()
+                            if state['state']==5:session.close();session=None;self.ended.emit(token)
+                            else:state['_token']=token;self.progress.emit(state)
+                except Exception as e:
+                    if session and name!='start' and token==self.latest_start and isinstance(e,(AutomationBusy,AutomationInputBlocked,TimeoutError)):
+                        last_poll=time.monotonic()
+                        if name:
+                            state=dict(session.last_state,_token=token,warning=str(e));self.progress.emit(state)
+                        continue
+                    if session:session.close();session=None
+                    if isinstance(e,AutomationCancelled) or token!=self.latest_start:continue
+                    self.failed.emit(token,str(e))
+        finally:
+            if session:session.close()
     def shutdown(self):
         self.latest_start=None
-        if self.isRunning():self.commands.put(('shutdown',None));return self.wait(5000)
+        if self.isRunning():self.commands.put(('shutdown',None,None));return self.wait(5000)
         return True
