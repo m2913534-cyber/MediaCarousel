@@ -24,7 +24,7 @@
 4. Release 附件會有三個 ZIP、`SHA256SUMS.txt`，以及 版本更新紀錄（RELEASE-NOTES.md）與 GitHub 自動產生的變更清單。請在正式對外公告前檢查版本說明，補充人工測試結果與已知限制。
 5. 若發佈失敗，查看 Actions 錯誤並修復；不要把失敗的標籤當成正式可下載版本。
 
-平常推送 `main` 或手動執行工作流程仍只建立暫存 Artifacts，保留 30 天。**只有推送 `v*` 版本標籤會觸發 Release**。正式下載請使用 Releases 頁面，不要分享 Artifacts 暫時網址。
+平常推送 `main` 或手動執行工作流程仍只建立暫存 Artifacts，保留 30 天。也可在 main 的 Run workflow 勾選 `publish_release`，成功後會從規格內的版本號建立標籤及 Release；預設不勾選。**推送 `v*` 標籤仍會自動發佈**。正式下載請使用 Releases 頁面，不要分享 Artifacts 暫時網址。
 
 ## 測試界線
 

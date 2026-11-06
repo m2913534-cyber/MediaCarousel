@@ -2,6 +2,11 @@ name: Build desktop apps
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the bundle version after all checks pass
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -97,19 +102,28 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
+          RELEASE_TAG="v$(python -c "import re; from pathlib import Path; print(re.search(r\"'CFBundleShortVersionString':'([^']+)'\", Path('MediaCarousel-v2.1-GitHub-AutoBuild/MediaCarousel.spec').read_text()).group(1))")"
+          tag_args=(--target "$RELEASE_COMMIT")
+          if [[ "$RELEASE_REF" == refs/tags/* ]]; then
+            tag_args=(--verify-tag)
+          elif gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Tag already exists; use the tag-triggered workflow."
+            exit 1
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "::error::Release already exists; refusing to overwrite assets."
             exit 1
           fi
           gh release create "$RELEASE_TAG" release/*.zip release/SHA256SUMS.txt release/RELEASE-NOTES.md \
             --title "MediaCarousel $RELEASE_TAG" --notes-file release/RELEASE-NOTES.md \
-            --generate-notes --verify-tag --draft
+            --generate-notes "${tag_args[@]}" --draft
           gh release edit "$RELEASE_TAG" --draft=false --latest
