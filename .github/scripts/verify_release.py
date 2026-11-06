@@ -1,5 +1,4 @@
 """Validate the three native archives and create release metadata; no device claims."""
-import ast
 import hashlib
 import os
 from pathlib import Path
@@ -63,8 +62,9 @@ notes = f'''# MediaCarousel {version}
 來源 commit：{os.environ.get('GITHUB_SHA', 'local validation')}。
 建置紀錄：https://github.com/{os.environ.get('GITHUB_REPOSITORY', 'm2913534-cyber/MediaCarousel')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}
 
-## 2.11 更新紀錄（原始碼記載，非新增實機驗證）
+## {version} 更新紀錄（原始碼記載，非新增實機驗證）
 
 '''
-notes += (source / 'UPDATE-2.11.md').read_text(encoding='utf-8')
+history = source / f"UPDATE-{version.removesuffix('.0')}.md"
+notes += history.read_text(encoding='utf-8') if history.exists() else '請參閱本 Release 的 GitHub 變更清單。\n'
 (folder / 'RELEASE-NOTES.md').write_text(notes, encoding='utf-8')
