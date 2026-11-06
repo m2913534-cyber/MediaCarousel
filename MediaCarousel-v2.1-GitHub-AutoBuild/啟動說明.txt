@@ -1,0 +1,26 @@
+﻿MediaCarousel 2.11 — 啟動說明
+
+【Windows】
+1. 將整個 zip 完整解壓縮（不要在壓縮檔內直接開）。
+2. 雙擊 Start-Windows.bat。
+   - 第一次會建立執行環境並下載元件，約 2–5 分鐘，需要網路。之後雙擊幾秒即開。
+   - 若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
+   - 若找不到 Python，會開啟 python.org：安裝 3.12（勾選 Add python.exe to PATH），再雙擊一次。
+3. 啟動後黑色主控台會縮到工作列，請勿關閉；關閉程式視窗即一併結束。
+
+【Mac】
+1. 將整個 zip 完整解壓縮。
+2. 第一次：在 Start-Mac.command 上按右鍵 →「打開」→ 再按「打開」（之後可直接雙擊）。
+   若提示沒有執行權限，打開「終端機」輸入：chmod +x 拖入 Start-Mac.command 後按 Return。
+3. 第一次建立環境約 2–5 分鐘，需要網路。macOS 內建的 Python 3.9 不支援，找不到時會開啟 python.org 下載頁。
+4. 終端機視窗請保留；關閉它會一併結束程式。
+5. PowerPoint 原生放映所需的「自動化」「輔助使用」權限，與 2.10 相同（見 README-Mac-zh-TW.txt）。
+
+【出問題時】
+- 記錄檔都在 logs 資料夾，回報問題時附上最新一份即可。
+- 重建執行環境：Windows 在本資料夾開命令提示字元執行「Start-Windows.bat --repair」；
+  Mac 在終端機執行「./Start-Mac.command --repair」。也可以直接刪除 .venv 資料夾再雙擊。
+
+【需要免安裝 Python 的原生 .app／.exe？】
+把本資料夾內容覆蓋到 GitHub 專案的 MediaCarousel-v2.1-GitHub-AutoBuild 資料夾並推送，
+既有的 Build desktop apps 流程會產出 Windows-x64、Mac-Apple-Silicon、Mac-Intel 三個 zip。

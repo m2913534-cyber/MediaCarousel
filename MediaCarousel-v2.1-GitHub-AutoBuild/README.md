@@ -19,9 +19,9 @@
 ## 維護者：建立正式版本
 
 1. 先將更新合併到 `main`，確認一般建置流程三平台成功。
-2. 建立指向已審核 commit 的新版本標籤（例如 `v2.1.0`）並推送：`git tag v2.1.0 && git push origin v2.1.0`。標籤請勿重複使用。
+2. 建立指向已審核 commit 的新版本標籤（例如 `v2.11.0`）並推送：`git tag v2.11.0 && git push origin v2.11.0`。標籤請勿重複使用。
 3. `Build desktop apps` 會針對該標籤重新建置三平台，執行 `ci_verify.py`，產生完整 ZIP；全部成功後才建立 GitHub Release。
-4. Release 附件會有三個 ZIP、`SHA256SUMS.txt`，以及 GitHub 自動產生的版本更新紀錄。請在正式對外公告前檢查版本說明，補充人工測試結果與已知限制。
+4. Release 附件會有三個 ZIP、`SHA256SUMS.txt`，以及 版本更新紀錄（RELEASE-NOTES.md）與 GitHub 自動產生的變更清單。請在正式對外公告前檢查版本說明，補充人工測試結果與已知限制。
 5. 若發佈失敗，查看 Actions 錯誤並修復；不要把失敗的標籤當成正式可下載版本。
 
 平常推送 `main` 或手動執行工作流程仍只建立暫存 Artifacts，保留 30 天。**只有推送 `v*` 版本標籤會觸發 Release**。正式下載請使用 Releases 頁面，不要分享 Artifacts 暫時網址。
@@ -31,3 +31,6 @@
 CI 執行建置及 `ci_verify.py` 的自動檢查，並驗證 ZIP 可解壓。這**不代表**已在實際 Windows、Mac M3 Max、Intel Mac 裝置完成安裝、開啟、影片解碼、12 畫面效能、音訊輸出或擷取卡驗證。正式活動前仍須以實際設備、素材及輸出裝置進行測試。
 
 這項發佈流程只改變包裝與下載方式，不承諾修改或修復播放器功能。
+## v2.10 Mac PowerPoint
+
+Mac 已加入桌面版 PowerPoint 原生放映整合，可由 PowerPoint 處理其支援的動畫與音效。需要已安裝並啟用 PowerPoint，且允許 macOS 自動化與輔助使用。詳見 `README-Mac-zh-TW.txt` 與 `UPDATE-2.10.md`；Mac 輸出螢幕、換頁時間由 PowerPoint 設定，CUE 保存頁碼，不保證動畫步數還原。建置環境沒有 Office，實際動畫／音效尚需實機確認。
