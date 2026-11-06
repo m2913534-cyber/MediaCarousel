@@ -114,7 +114,7 @@ class Deck:
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Media Carousel 2.10｜影音輪播工作台'); self.resize(1320,820)
+        super().__init__(); self.setWindowTitle('Media Carousel 2.11｜影音輪播工作台'); self.resize(1320,820)
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
@@ -140,8 +140,9 @@ class Window(QMainWindow):
         self.clip_gain.valueChanged.connect(lambda value:self.live_selected_audio(gain=value))
         self.clip_mute.toggled.connect(lambda value:self.live_selected_audio(mute=value))
         self.timer=QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(16); self.last=time.monotonic()
-        for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self,activated=fn)
-        for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]: QShortcut(QKeySequence(key),self.output_view,activated=fn)
+        for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]:
+            QShortcut(QKeySequence(key),self,activated=lambda fn=fn,key=key:self.guarded_shortcut(key,fn))
+            QShortcut(QKeySequence(key),self.output_view,activated=fn)
         self.session_path=Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))/'last-session.mcarousel'
         self.session_ready=False
         if self.session_path.exists():
@@ -149,10 +150,20 @@ class Window(QMainWindow):
                 self.restore_project_data(load_project(self.session_path))
                 self.status.setText('已恢復上次場景與播放清單；按播放啟動。')
             except Exception as exc:
-                self.status.setText('上次場景讀取失敗，原檔保留：'+str(exc))
-                return
+                # Keep the unreadable file for recovery, then continue with autosave enabled.
+                backup=self.session_path.with_name(time.strftime('last-session-unreadable-%Y%m%d-%H%M%S.mcarousel'))
+                try:self.session_path.replace(backup);kept='已備份為 '+str(backup)
+                except OSError:kept='備份失敗，原檔保留'
+                self.status.setText('上次場景讀取失敗（'+str(exc)+'），'+kept+'；自動保存已繼續運作。')
         self.session_ready=True
         self.session_timer=QTimer(self);self.session_timer.timeout.connect(self.persist_session);self.session_timer.start(2000)
+    def guarded_shortcut(self,key,fn):
+        """Space/arrow shortcuts must not hijack a field the operator is typing into."""
+        from PySide6.QtWidgets import QLineEdit,QAbstractSpinBox,QTextEdit,QPlainTextEdit
+        focus=QApplication.focusWidget()
+        if key!='F11' and isinstance(focus,(QLineEdit,QAbstractSpinBox,QTextEdit,QPlainTextEdit)):return
+        if key=='Space' and isinstance(focus,QComboBox):focus.showPopup();return
+        fn()
     def persist_session(self):
         if not self.session_ready:return
         try:
@@ -289,12 +300,31 @@ class Window(QMainWindow):
         for path in paths:
             if Path(path).is_file(): self.lists[self.group_index()]['items'].append({'path':str(Path(path).resolve()),'seconds':self.seconds.value()})
         self.render()
+    def live_edit_safe(self):
+        """True when the list can change without interrupting the single-screen output."""
+        busy=self.pending or self.transition or self.presentations.active or self.presentations.starting
+        return not busy and not (hasattr(self,'compositor') and self.compositor.enabled)
+    def reindex_current(self,mapping):
+        """Keep the playing item on air after its row number changes; mapping(old_row)->new_row."""
+        self.next_cache.discard(self);self.failed.clear()
+        if self.current is not None and self.cue_item is None and self.current[0]==self.group_index():
+            self.current=(self.current[0],mapping(self.current[1]))
     def remove(self):
-        row=self.files.currentRow()
-        if row>=0:self.stop(); self.lists[self.group_index()]['items'].pop(row); self.render()
+        row=self.files.currentRow();group=self.group_index();items=self.lists[group]['items']
+        if not 0<=row<len(items):return
+        playing=self.current is not None and self.cue_item is None and self.current==(group,row)
+        if playing or (self.current is not None and not self.live_edit_safe()):self.stop()
+        items.pop(row)
+        if self.current is not None:self.reindex_current(lambda i:i-1 if i>row else i)
+        self.render();self.files.setCurrentRow(min(row,len(items)-1));self.persist_session()
+        if self.current is not None:self.status.setText('已移除；目前輸出持續播放。')
     def move(self,delta):
         row=self.files.currentRow(); items=self.lists[self.group_index()]['items']; target=row+delta
-        if row>=0 and 0<=target<len(items):self.stop(); items[row],items[target]=items[target],items[row]; self.render(); self.files.setCurrentRow(target)
+        if not (row>=0 and 0<=target<len(items)):return
+        if self.current is not None and not self.live_edit_safe():self.stop()
+        items[row],items[target]=items[target],items[row]
+        if self.current is not None:self.reindex_current(lambda i:target if i==row else row if i==target else i)
+        self.render(); self.files.setCurrentRow(target);self.persist_session()
     def play_selected(self):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.use_selected_file();return
         self.failed.clear(); row=max(0,self.files.currentRow()); self.request((self.group_index(),row))
@@ -315,6 +345,7 @@ class Window(QMainWindow):
         if self.held:self.request(self.current,item_override=self.cue_item);return
         if self.current is None:self.play_selected();return
         self.running=not self.running
+        self.wake()
         for i,d in enumerate(self.decks):
             if d.kind=='video' and (i==self.active or self.transition or self.pending):
                 d.player.play() if self.running else d.player.pause()
@@ -351,6 +382,7 @@ class Window(QMainWindow):
         if item_override is None:self.groups.setCurrentIndex(p);self.files.setCurrentRow(i)
         item=self.current_item(); idx=1-self.active; self.running=True
         self.pending={'index':idx,'started':time.monotonic()}; self.elapsed=0;self.single_editor.sync()
+        self.wake()
         try:
             if item.get('kind')!='black' and not Path(item['path']).is_file():raise ValueError('找不到檔案')
             d=self.decks[idx]
@@ -393,6 +425,7 @@ class Window(QMainWindow):
         if effect=='隨機效果':effect=random.choice(EFFECTS[:-1])
         self.decks[idx].root.setZValue(2);self.decks[self.active].root.setZValue(1);self.decks[idx].item.setZValue(2); self.decks[self.active].item.setZValue(1)
         self.transition={'new':idx,'old':self.active,'time':0.,'effect':effect}
+        self.wake()
         self.elapsed=0; self.status.setText('播放中：'+media_name(self.decks[idx].config))
         if effect=='直接切換':self.update_transition(1)
     def update_transition(self,t):
@@ -433,7 +466,19 @@ class Window(QMainWindow):
             if d.kind=='video':
                 self.elapsed=0;d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]);d.player.play();return
         self.request(target)
+    def wake(self):
+        """Switch back to 60 Hz the moment playback or a transition starts."""
+        if self.timer.interval()!=16:self.timer.setInterval(16)
+    def pace(self):
+        # 60 Hz while video/transitions run, 20 Hz for still images and PDF, 10 Hz when idle.
+        if self.pending or self.transition:interval=16
+        elif self.presentations.active or not self.running or self.current is None:interval=100
+        else:interval=16 if self.decks[self.active].kind=='video' else 50
+        if self.timer.interval()!=interval:self.timer.setInterval(interval)
     def tick(self):
+        try:self.tick_once()
+        finally:self.pace()
+    def tick_once(self):
         now=time.monotonic(); dt=min(now-self.last,.25); self.last=now
         if self.presentations.active:return
         if not self.running:return

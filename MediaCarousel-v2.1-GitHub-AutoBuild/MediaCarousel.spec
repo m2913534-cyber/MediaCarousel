@@ -8,5 +8,5 @@ pyz=PYZ(a.pure)
 exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name='MediaCarousel',debug=False,bootloader_ignore_signals=False,strip=False,upx=False,console=False,disable_windowed_traceback=False,target_arch=None,codesign_identity=None,entitlements_file=None)
 coll=COLLECT(exe,a.binaries,a.datas,strip=False,upx=False,name='MediaCarousel')
 if sys.platform=='darwin':
-    app=BUNDLE(coll,name='MediaCarousel.app',icon=None,bundle_identifier='local.mediacarousel.studio',info_plist={'CFBundleShortVersionString':'2.10.0','CFBundleVersion':'2100','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'允許 MediaCarousel 控制 PowerPoint 原生放映與 System Events 簡報按鍵，以播放 PPT 動畫及音效。','NSCameraUsageDescription':'加入攝影機或 HDMI 擷取卡的即時畫面。','NSScreenCaptureUsageDescription':'將選定螢幕或視窗加入多畫面輸出。'})
+    app=BUNDLE(coll,name='MediaCarousel.app',icon=None,bundle_identifier='local.mediacarousel.studio',info_plist={'CFBundleShortVersionString':'2.11.0','CFBundleVersion':'2110','NSHighResolutionCapable':True,'NSAppleEventsUsageDescription':'允許 MediaCarousel 控制 PowerPoint 原生放映與 System Events 簡報按鍵，以播放 PPT 動畫及音效。','NSCameraUsageDescription':'加入攝影機或 HDMI 擷取卡的即時畫面。','NSScreenCaptureUsageDescription':'將選定螢幕或視窗加入多畫面輸出。'})
 

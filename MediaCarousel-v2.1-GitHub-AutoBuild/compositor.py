@@ -161,6 +161,7 @@ class Layer(QGraphicsRectItem):
     def start(self):
         if self.c['kind']!='playlist':self.start_capture();return
         self.running=True
+        self.panel.wake()
         if self.held:self.request(self.current);return
         if self.current is None:self.request((self.c['group'],-1),initial=True)
         else:
@@ -198,6 +199,7 @@ class Layer(QGraphicsRectItem):
             host.status.setText('PowerPoint 動畫簡報使用獨立原生輸出，請切回單畫面播放。');self.stop();return
         initial_load=self.current is None;prepared=host.next_cache.take(self,target,items[i])
         self.current=target;self.running=True;idx=1-self.active;self.pending=(idx,time.monotonic());self.elapsed=0
+        self.panel.wake()
         try:
             item=deepcopy(items[i])
             if initial_load and 'cue_position' in self.c:item['_resume_ms']=self.c['cue_position']
@@ -531,9 +533,17 @@ class Compositor(QDockWidget):
         for l in self.layers:l.stop()
     def advance(self,reverse=False):
         for l in self.layers:l.advance(reverse)
+    def wake(self):
+        """Return to frame-rate ticking as soon as any layer has work."""
+        if self.timer.interval()!=16:self.timer.setInterval(16)
     def tick(self):
         now=time.monotonic();dt=min(.25,now-self.last);self.last=now
+        busy=False
         if self.enabled:
-            for l in self.layers:l.tick(dt)
+            for l in self.layers:
+                l.tick(dt);busy=busy or bool(l.running or l.pending or l.transition)
+        # Idle: 10 Hz is enough to notice new work; playback/transitions keep 60 Hz.
+        interval=16 if busy else 100
+        if self.timer.interval()!=interval:self.timer.setInterval(interval)
 
 
