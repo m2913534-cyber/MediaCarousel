@@ -2,6 +2,13 @@ from pathlib import Path
 import json, os, math
 from copy import deepcopy
 MODES = ['清單循環', '所有清單輪播', '單檔循環', '播放一次']
+# Per-list play mode shown next to the list; maps onto the playback engine's modes.
+LIST_MODES = ['循環', '播完停止', '單檔循環', '播完接下一清單']
+LIST_TO_MODE = dict(zip(LIST_MODES, ['清單循環', '播放一次', '單檔循環', '所有清單輪播']))
+MODE_TO_LIST = {v: k for k, v in LIST_TO_MODE.items()}
+def list_mode(group, default='清單循環'):
+    """A list's own mode, or the project-wide default for lists that never set one."""
+    return LIST_TO_MODE.get(group.get('mode'), default if default in MODES else MODES[0])
 EFFECTS = ['淡入淡出', '淡出至黑再淡入', '向左滑動', '向右滑動', '縮放淡入', '直接切換', '隨機效果']
 IMAGE_EXT = {'.jpg','.jpeg','.png','.bmp','.webp','.tif','.tiff','.gif'}
 MAX_LAYERS = 12
@@ -10,8 +17,16 @@ PPT_EXT={'.ppt','.pptx','.pps','.ppsx'}
 def is_pdf(item):return Path(item.get('path','')).suffix.lower() in PDF_EXT
 def is_powerpoint(item):return Path(item.get('path','')).suffix.lower() in PPT_EXT
 
-def is_still(item):return item.get('kind')=='black' or Path(item.get('path','')).suffix.lower() in IMAGE_EXT
-def media_name(item):return item.get('name','黑畫面') if item.get('kind')=='black' else Path(item.get('path','')).name
+def is_virtual(item):return item.get('kind') in ('black','lan')
+def is_lan(item):return item.get('kind')=='lan'
+def is_still(item):return is_virtual(item) or Path(item.get('path','')).suffix.lower() in IMAGE_EXT
+def holds(item):
+    """Stills marked hold, and live LAN sources, stay on screen until the operator advances manually."""
+    return (bool(item.get('hold')) or is_lan(item)) and is_still(item)
+def media_name(item):
+    if item.get('kind')=='black':return item.get('name','黑畫面')
+    if is_lan(item):return item.get('name','內網畫面')
+    return Path(item.get('path','')).name
 
 def media_walk(value,fn):
     if isinstance(value,dict):
@@ -63,8 +78,9 @@ def save_project(path, lists, settings, scenes=None, layout=None):
     base=Path(path).parent
     data=deepcopy({'version':2,'lists':lists,'settings':settings,'scenes':scenes or [],'layout':layout or []})
     def relative(item):
-        if item.get('kind')=='black':return
-        try:item['path']=os.path.relpath(item['path'],base)
+        if is_virtual(item):return
+        # Compare real paths: loading resolves symlinks (e.g. /var → /private/var), so saving must too.
+        try:item['path']=os.path.relpath(os.path.realpath(item['path']),os.path.realpath(base))
         except ValueError:pass
     media_walk(data,relative)
     tmp=Path(str(path)+'.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8');tmp.replace(path)
@@ -74,12 +90,14 @@ def load_project(path):
     if data.get('version') not in (1,2) or not isinstance(data.get('lists'),list): raise ValueError('不支援的專案格式')
     for group in data['lists']:
         if not isinstance(group.get('name'),str) or not isinstance(group.get('items'),list):raise ValueError('清單資料錯誤')
+        if 'mode' in group and group['mode'] not in LIST_TO_MODE:del group['mode']
         for item in group['items']:
             if not isinstance(item.get('path'),str):raise ValueError('媒體路徑錯誤')
     def absolute(item):
         if not isinstance(item['path'],str):raise ValueError('媒體路徑錯誤')
-        if item.get('kind')!='black':item['path']=str((Path(path).parent/item['path']).resolve())
+        if not is_virtual(item):item['path']=str((Path(path).parent/item['path']).resolve())
         item['seconds']=number(item.get('seconds',5),5,.5,86400)
+        if 'hold' in item:item['hold']=bool(item['hold'])
         if any(key in item for key in ('single_x','single_y','single_zoom','single_scale_x','single_scale_y')):
             x,y,sx,sy=single_transform(item);item.update(single_x=x,single_y=y,single_scale_x=sx,single_scale_y=sy,single_zoom=number(item.get('single_zoom',sx),sx,.05,8))
         if is_pdf(item):item['pdf_page']=int(number(item.get('pdf_page',0),0,0,1000000))

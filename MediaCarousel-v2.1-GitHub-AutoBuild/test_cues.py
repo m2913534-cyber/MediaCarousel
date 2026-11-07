@@ -9,7 +9,7 @@ from model import save_project,load_project
 from audio_meter import levels
 app=QApplication([]);w=Window();w.session_ready=False;w.session_timer.stop();w.effect.setCurrentText('直接切換');c=w.compositor
 with tempfile.TemporaryDirectory() as folder:
- path=folder+'/image.png';im=QImage(300,200,QImage.Format_RGB32);im.fill(QColor('red'));im.save(path)
+ path=os.path.realpath(folder)+'/image.png';im=QImage(300,200,QImage.Format_RGB32);im.fill(QColor('red'));im.save(path)
  w.lists=[{'name':'來源','items':[{'path':path,'seconds':10,'start':0,'end':0,'gain':32,'mute':True}]}];w.refresh_groups();w.files.setCurrentRow(0)
  original=copy.deepcopy(w.lists);c.grid(2,2);assert w.lists==original
  for i in range(4):

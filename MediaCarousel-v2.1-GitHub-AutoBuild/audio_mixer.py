@@ -106,10 +106,37 @@ class AudioMixer(QWidget):
         binding.deck.config.update(changes);binding.deck.source_ref.update(changes);self.host.refresh_live_audio();self.host.sync_selected_audio();self.refresh()
         if persist:self.host.persist_session()
 
+class MasterStrip(QWidget):
+    """Always-visible master fader; drives the host's master volume (0–100 %) with a dB taper."""
+    def __init__(self,host):
+        super().__init__();self.host=host;self.setObjectName('MasterStrip');self.setFixedWidth(112)
+        v=QVBoxLayout(self);v.setContentsMargins(7,7,7,7);v.setSpacing(5)
+        title=QLabel('MASTER');title.setObjectName('PanelHeading');title.setAlignment(Qt.AlignCenter);v.addWidget(title)
+        self.readout=QLabel();self.readout.setObjectName('FaderReadout');self.readout.setAlignment(Qt.AlignCenter);v.addWidget(self.readout)
+        r=QHBoxLayout();r.setSpacing(2);v.addLayout(r,1);r.addWidget(DecibelScale())
+        self.slider=QSlider(Qt.Vertical);self.slider.setObjectName('ChannelFader');self.slider.setRange(0,1000);self.slider.setMinimumHeight(90);self.slider.setTickPosition(QSlider.TicksBothSides);self.slider.setTickInterval(200);self.slider.setPageStep(50);self.slider.setSingleStep(5);r.addWidget(self.slider,1)
+        self.slider.setAccessibleName('總音量推桿');self.slider.setToolTip('總輸出音量：所有影片、格子與簡報聲音都會經過這裡。')
+        self.percent=QLabel();self.percent.setObjectName('SecondaryLabel');self.percent.setAlignment(Qt.AlignCenter);v.addWidget(self.percent)
+        self.mute=QPushButton('MUTE ALL');self.mute.setObjectName('ChannelMute');self.mute.setCheckable(True);self.mute.setToolTip('全部靜音；保留推桿位置。');v.addWidget(self.mute)
+        self.slider.valueChanged.connect(self.moved);self.mute.toggled.connect(host.set_master_mute);host.volume.valueChanged.connect(self.sync);self.sync()
+    def moved(self,value):
+        target=int(round(fader_gain(value)))
+        if self.host.volume.value()!=target:self.host.volume.setValue(target)
+        self.show_level(target)
+    def sync(self,*_):
+        volume=self.host.volume.value();target=gain_fader(volume)
+        # Rounding to whole percent must not snap the fader back while it is being dragged.
+        if not self.slider.isSliderDown() and round(fader_gain(self.slider.value()))!=volume:
+            blocked=self.slider.blockSignals(True);self.slider.setValue(target);self.slider.blockSignals(blocked)
+        self.show_level(volume)
+    def show_level(self,volume):
+        self.readout.setText(f'{20*math.log10(volume/100):.1f} dB' if volume>0 else '−∞ dB');self.percent.setText(f'{volume}%')
+
 class AudioPanel(QWidget):
     def __init__(self,host,meter):
-        super().__init__();self.performance=False;self.meter=meter;self.mixer=AudioMixer(host);self.box=QBoxLayout(QBoxLayout.TopToBottom,self);self.box.setContentsMargins(8,6,8,6);self.box.setSpacing(4);self.box.addWidget(meter);self.box.addWidget(self.mixer,1);self.mixer.contentChanged.connect(self.relayout)
+        super().__init__();self.performance=False;self.meter=meter;self.mixer=AudioMixer(host);self.master=MasterStrip(host)
+        self.box=QBoxLayout(QBoxLayout.LeftToRight,self);self.box.setContentsMargins(8,6,8,6);self.box.setSpacing(4);self.box.addWidget(meter);self.box.addWidget(self.mixer,1);self.box.addWidget(self.master);self.mixer.contentChanged.connect(self.relayout);self.relayout()
     def set_performance(self,on):
         self.performance=on;self.relayout()
     def relayout(self):
-        vertical=self.performance or bool(self.mixer.strips);self.box.setDirection(QBoxLayout.LeftToRight if vertical else QBoxLayout.TopToBottom);self.meter.set_vertical(vertical)
+        self.meter.set_vertical(True)

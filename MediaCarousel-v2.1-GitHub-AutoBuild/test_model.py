@@ -26,4 +26,11 @@ class Tests(unittest.TestCase):
                 with self.assertRaises(ValueError):load_project(p)
     def test_geometry_clamp(self):
         c=normalize_layer({'x':1900,'y':1000,'w':600,'h':400,'gain':float('nan')},1);self.assertEqual((c['x'],c['y'],c['gain']),(1320,680,100))
+    def test_symlinked_folder_roundtrip(self):
+        # Media reached through a symlinked folder must reload to the same real file.
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            real=Path(tmp).resolve()/'real';real.mkdir();(real/'a.png').write_bytes(b'x');link=Path(tmp)/'link';os.symlink(real,link)
+            project=link/'show.mcarousel';save_project(project,[{'name':'x','items':[{'path':str(real/'a.png')}]}],{})
+            self.assertEqual(load_project(project)['lists'][0]['items'][0]['path'],str(real/'a.png'))
 if __name__=='__main__':unittest.main()

@@ -54,7 +54,7 @@ class NextVideoCache:
         if not owner.running or owner.current is None or owner.pending or owner.transition or owner.held:return None
         if owner is h:
             if h.cue_item is not None:return None
-            target=following(h.lists,h.current,h.mode.currentText())
+            target=following(h.lists,h.current,h.effective_mode())
             if target is None:return None
             item=h.lists[target[0]]['items'][target[1]];direct=h.effect.currentText()=='直接切換'
         else:
