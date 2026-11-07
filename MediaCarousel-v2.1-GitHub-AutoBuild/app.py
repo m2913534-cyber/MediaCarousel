@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform,holds
+from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform,holds,list_mode,MODE_TO_LIST
 
 class Screen(QGraphicsView):
     def __init__(self):
@@ -27,7 +27,14 @@ class Screen(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setRenderHints(QPainter.Antialiasing|QPainter.SmoothPixmapTransform)
         self.setWindowTitle('Media Carousel — 播放輸出'); self.resize(960,540)
-        self.exit_callback=None;self.fit_mode=0
+        self.exit_callback=None;self.fit_mode=0;self.state_callback=None
+    def notify_state(self):
+        if self.state_callback:QTimer.singleShot(0,self.state_callback)
+    def showEvent(self,event):super().showEvent(event);self.notify_state()
+    def hideEvent(self,event):super().hideEvent(event);self.notify_state()
+    def changeEvent(self,event):
+        super().changeEvent(event)
+        if event.type()==event.Type.WindowStateChange:self.notify_state()
     def refit(self):
         r=self.sceneRect();v=self.viewport().size()
         if not r.width() or not r.height():return
@@ -131,6 +138,10 @@ class Window(QMainWindow):
         from single_editor import SingleEditor
         self.single_editor=SingleEditor(self)
         self.output_view=Screen();self.output_view.viewport().setProperty('clean_output',True);self.output_view.setInteractive(False);self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
+        from output_support import KeepAwake,set_gpu,gpu_enabled
+        self.keep_awake=KeepAwake();set_gpu(self.output_view,gpu_enabled());self.output_view.state_callback=self.refresh_live_state
+        self.output_gpu.blockSignals(True);self.output_gpu.setChecked(gpu_enabled());self.output_gpu.blockSignals(False)
+        self.live_timer=QTimer(self);self.live_timer.timeout.connect(self.refresh_live_state);self.live_timer.start(1000)
         self.preview_view=Screen();self.preview_view.viewport().setProperty('clean_output',True);self.preview_view.setInteractive(False);self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
         from presentations import PresentationController
         self.presentations=PresentationController(self)
@@ -143,7 +154,8 @@ class Window(QMainWindow):
         for key,fn in [('Space',self.toggle),('F11',self.output),('Right',self.advance),('Left',lambda:self.advance(True))]:
             QShortcut(QKeySequence(key),self,activated=lambda fn=fn,key=key:self.guarded_shortcut(key,fn))
             QShortcut(QKeySequence(key),self.output_view,activated=fn)
-        self.session_path=Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))/'last-session.mcarousel'
+        # Tests point this at a temp folder so they never touch a real session.
+        self.session_path=Path(os.environ.get('MEDIACAROUSEL_SESSION_DIR') or QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))/'last-session.mcarousel'
         self.session_ready=False
         if self.session_path.exists():
             try:
@@ -184,7 +196,7 @@ class Window(QMainWindow):
         self.groups.blockSignals(True); self.groups.clear(); self.groups.addItems([x['name'] for x in self.lists]); self.groups.setCurrentIndex(index); self.groups.blockSignals(False); self.render()
         if hasattr(self,'compositor'):self.compositor.refresh_groups()
     def render(self,*_):
-        self.files.clear()
+        self.sync_list_mode();self.files.clear()
         for item in self.lists[self.group_index()]['items']:
             path=Path(item['path']); image=is_still(item)
             text=f"{'PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (('  / 手動' if holds(item) else f"  / {item['seconds']:g} 秒") if image else '')
@@ -222,7 +234,7 @@ class Window(QMainWindow):
             envelopes[tr['old']],envelopes[tr['new']]=old,new
         elif self.current is not None:envelopes[self.active]=1
         for i,d in enumerate(self.decks):
-            d.live_audio.apply(envelopes[i]*self.volume.value()/100*self.deck_gain(d),d.config.get('mute'))
+            d.live_audio.apply(envelopes[i]*self.master_level()*self.deck_gain(d),d.config.get('mute'))
     def show_preview(self):
         self.preview_view.show();self.preview_view.raise_();self.preview_view.refit()
     def media_menu(self,pos):
@@ -266,6 +278,15 @@ class Window(QMainWindow):
         if end and end<=start:QMessageBox.warning(self,'片段錯誤','結束秒數必須大於開始秒數');return
         items[row].update(start=start,end=end,gain=self.clip_gain.value(),mute=self.clip_mute.isChecked())
         self.live_selected_audio(gain=self.clip_gain.value(),mute=self.clip_mute.isChecked());self.status.setText('音量與靜音即時生效；片段起訖在下次播放時套用。')
+    def effective_mode(self,group=None):
+        if group is None:group=self.current[0] if self.current is not None else self.group_index()
+        return list_mode(self.lists[group],self.mode.currentText()) if 0<=group<len(self.lists) else self.mode.currentText()
+    def sync_list_mode(self,*_):
+        if not hasattr(self,'list_mode') or not hasattr(self,'mode'):return
+        blocked=self.list_mode.blockSignals(True);self.list_mode.setCurrentText(MODE_TO_LIST[self.effective_mode(self.group_index())]);self.list_mode.blockSignals(blocked)
+    def set_list_mode(self,text):
+        self.lists[self.group_index()]['mode']=text;self.persist_session()
+        self.status.setText(f'「{self.lists[self.group_index()]["name"]}」播放方式：{text}')
     def set_seconds(self,value):
         row=self.files.currentRow(); items=self.lists[self.group_index()]['items']
         if 0<=row<len(items): items[row]['seconds']=value; self.render(); self.files.setCurrentRow(row)
@@ -471,12 +492,12 @@ class Window(QMainWindow):
         if hasattr(self,'compositor') and self.compositor.enabled:self.compositor.advance(reverse);return
         if self.pending or self.transition:return
         if self.cue_item is not None:
-            target=following([{'items':[self.cue_item]}],(0,0),self.mode.currentText(),reverse)
+            target=following([{'items':[self.cue_item]}],(0,0),self.effective_mode(),reverse)
             d=self.decks[self.active]
             if target is not None and self.effect.currentText()=='直接切換' and d.kind=='video' and not self.held:
                 self.elapsed=0;d.player.setPosition(clip_bounds(d.config,d.player.duration())[0]);d.player.play();return
             item=deepcopy(self.cue_item);item.pop('_resume_ms',None);self.request(target,item_override=item);return
-        target=following(self.lists,self.current or (self.group_index(),-1),self.mode.currentText(),reverse)
+        target=following(self.lists,self.current or (self.group_index(),-1),self.effective_mode(),reverse)
         if target==self.current and self.effect.currentText()=='直接切換' and not self.held:
             d=self.decks[self.active]
             if d.kind=='video':
@@ -527,8 +548,8 @@ class Window(QMainWindow):
             remaining=end-position
             if duration>self.duration.value()*2000 and 0<remaining<=self.duration.value()*1000 and self.effect.currentText()!='直接切換':
                 if self.cue_item is not None:
-                    if self.mode.currentText()!='播放一次':self.advance()
-                elif following(self.lists,self.current,self.mode.currentText()) is not None:self.advance()
+                    if self.effective_mode()!='播放一次':self.advance()
+                elif following(self.lists,self.current,self.effective_mode()) is not None:self.advance()
         if not self.seek.isSliderDown():self.seek.setValue(int(min(1,fraction)*1000))
     def seek_to(self):
         if self.current is None or self.pending or self.transition:return
@@ -553,16 +574,37 @@ class Window(QMainWindow):
         self.output_fit.setCurrentIndex(1);self.refresh_output_fit()
     def output(self):
         if self.presentations.active:self.presentations.command('focus');return
-        if self.output_view.isFullScreen():self.output_view.showNormal()
-        else:self.output_view.showFullScreen()
-        QTimer.singleShot(0,self.output_view.refit)
+        view=self.output_view
+        if view.isFullScreen():view.showNormal()
+        else:
+            if not view.isVisible():
+                from output_support import output_screen
+                handle=self.windowHandle();self.place_output(output_screen(handle.screen() if handle else QApplication.primaryScreen()))
+            view.showFullScreen()
+        QTimer.singleShot(0,view.refit)
+    def place_output(self,screen):
+        view=self.output_view;view.showNormal();view.winId();view.windowHandle().setScreen(screen);view.setGeometry(screen.geometry())
+    def master_level(self):return 0 if getattr(self,'master_mute',False) else self.volume.value()/100
+    def set_master_mute(self,on):
+        self.master_mute=bool(on);self.refresh_live_audio();self.status.setText('全部靜音' if on else '已解除全部靜音')
+    def refresh_live_state(self):
+        """Hide the cursor on the live output and keep the Mac awake while anything is on air."""
+        view=self.output_view;live=view.isVisible() and view.isFullScreen()
+        view.viewport().setCursor(Qt.BlankCursor if live else Qt.ArrowCursor)
+        playing=self.running or any(l.running for l in self.compositor.layers)
+        self.keep_awake.set(live or playing);self.interface.set_live(live)
+    def set_output_gpu(self,on):
+        from output_support import set_gpu,preferences
+        set_gpu(self.output_view,on);preferences().setValue('output_gpu',bool(on));self.refresh_live_state()
+        self.status.setText('輸出改用 GPU 繪圖' if on else '輸出改用 CPU 繪圖（相容模式）')
     def choose_output(self):
         screens=QApplication.screens();labels=[f'{i+1}. {s.name()} / {round(s.size().width()*s.devicePixelRatio())}×{round(s.size().height()*s.devicePixelRatio())} 像素（縮放 {s.devicePixelRatio():g}×）' for i,s in enumerate(screens)]
         label,ok=QInputDialog.getItem(self,'選擇輸出螢幕','螢幕',labels,0,False)
         if ok:
             screen=screens[labels.index(label)]
             if self.presentations.active:self.presentations.move_output(screen,labels.index(label));return
-            self.output_view.showNormal();self.output_view.winId();self.output_view.windowHandle().setScreen(screen);self.output_view.setGeometry(screen.geometry());self.output()
+            from output_support import remember_screen
+            remember_screen(screen);self.place_output(screen);self.output()
     def settings(self):return {'canvas_width':int(self.screen.sceneRect().width()),'canvas_height':int(self.screen.sceneRect().height()),'ppt_timings':hasattr(self,'presentations') and self.presentations.timings.isChecked(),'pdf_auto':self.pdf_auto.isChecked(),'end_action':self.end_action.currentData(),'hold_last':self.hold_last.isChecked(),'performance':self.compositor.performance.isChecked(),'mode':self.mode.currentText(),'effect':self.effect.currentText(),'duration':self.duration.value(),'volume':self.volume.value(),'fit':self.fit.currentIndex(),'output_fit':self.output_fit.currentIndex(),'multi':getattr(self,'compositor',None) is not None and self.compositor.enabled}
     def save(self):
         path,_=QFileDialog.getSaveFileName(self,'儲存輪播專案','','輪播專案 (*.mcarousel)')
@@ -615,7 +657,7 @@ class Window(QMainWindow):
         if hasattr(self,'presentations') and not self.presentations.shutdown():
             self.status.setText('PowerPoint 正在結束放映，請稍候再關閉。');e.ignore();return
         for editor in list(getattr(self,'video_editors',{}).values()):editor.close()
-        self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();super().closeEvent(e)
+        self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();self.keep_awake.close();super().closeEvent(e)
 
 if __name__=='__main__':
     app=QApplication(sys.argv);app.setApplicationName('Media Carousel');window=Window();window.show()

@@ -1,6 +1,7 @@
 """Stills marked hold stay up until advanced manually, in single and multi-screen output."""
 import os,time,tempfile,json
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
+os.environ['MEDIACAROUSEL_SESSION_DIR']=tempfile.mkdtemp()
 from pathlib import Path
 from PySide6.QtGui import QPixmap,QColor
 from app import QApplication,Window

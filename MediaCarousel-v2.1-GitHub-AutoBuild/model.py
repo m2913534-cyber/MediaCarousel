@@ -2,6 +2,13 @@ from pathlib import Path
 import json, os, math
 from copy import deepcopy
 MODES = ['清單循環', '所有清單輪播', '單檔循環', '播放一次']
+# Per-list play mode shown next to the list; maps onto the playback engine's modes.
+LIST_MODES = ['循環', '播完停止', '單檔循環', '播完接下一清單']
+LIST_TO_MODE = dict(zip(LIST_MODES, ['清單循環', '播放一次', '單檔循環', '所有清單輪播']))
+MODE_TO_LIST = {v: k for k, v in LIST_TO_MODE.items()}
+def list_mode(group, default='清單循環'):
+    """A list's own mode, or the project-wide default for lists that never set one."""
+    return LIST_TO_MODE.get(group.get('mode'), default if default in MODES else MODES[0])
 EFFECTS = ['淡入淡出', '淡出至黑再淡入', '向左滑動', '向右滑動', '縮放淡入', '直接切換', '隨機效果']
 IMAGE_EXT = {'.jpg','.jpeg','.png','.bmp','.webp','.tif','.tiff','.gif'}
 MAX_LAYERS = 12
@@ -77,6 +84,7 @@ def load_project(path):
     if data.get('version') not in (1,2) or not isinstance(data.get('lists'),list): raise ValueError('不支援的專案格式')
     for group in data['lists']:
         if not isinstance(group.get('name'),str) or not isinstance(group.get('items'),list):raise ValueError('清單資料錯誤')
+        if 'mode' in group and group['mode'] not in LIST_TO_MODE:del group['mode']
         for item in group['items']:
             if not isinstance(item.get('path'),str):raise ValueError('媒體路徑錯誤')
     def absolute(item):

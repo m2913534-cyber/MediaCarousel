@@ -148,7 +148,7 @@ class Layer(QGraphicsRectItem):
     def error(self,message):
         self.stop();self.panel.host.status.setText(self.c['name']+'：'+message)
     def gain(self):
-        return 0 if self.c.get('mute') else self.c.get('gain',100)/100*self.panel.host.volume.value()/100
+        return 0 if self.c.get('mute') else self.c.get('gain',100)/100*self.panel.host.master_level()
     def apply_audio(self,progress=None):
         envelopes=[0.,0.]
         if self.transition:
@@ -219,7 +219,7 @@ class Layer(QGraphicsRectItem):
         if not items:return None
         if self.current is None and 'cue_index' in self.c:return (group,min(len(items)-1,int(self.c['cue_index'])))
         current=current or self.current or (group,-1)
-        mode=self.panel.host.mode.currentText()
+        mode=self.panel.host.effective_mode(group)
         if mode=='所有清單輪播':mode='清單循環'
         result=following([{'items':items}],(0,current[1]),mode,reverse)
         return (group,result[1]) if result is not None else None

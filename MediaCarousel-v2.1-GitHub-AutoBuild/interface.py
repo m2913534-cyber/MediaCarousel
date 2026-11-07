@@ -5,7 +5,7 @@ from PySide6.QtGui import QAction,QActionGroup,QFont
 from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,
     QPushButton,QLabel,QComboBox,QDoubleSpinBox,QSlider,QListWidget,QListView,QDockWidget,
     QToolBar,QToolButton,QMenu,QScrollArea,QSizePolicy,QAbstractItemView,QWidgetAction)
-from model import MODES,EFFECTS,media_name,holds
+from model import MODES,EFFECTS,media_name,holds,LIST_MODES
 
 NAMES=['導播控台','明亮工作室','舞台演出','精簡工作台']
 PALETTES=[
@@ -76,6 +76,8 @@ class Interface:
         more=QToolButton();more.setText('清單 ▾');menu=QMenu(more)
         for name,fn in [('新增清單',h.new_list),('重新命名',h.rename_list),('刪除清單',h.delete_list)]:action(menu,name,fn)
         more.setMenu(menu);more.setPopupMode(QToolButton.InstantPopup);r.addWidget(more)
+        r=row(v);label=QLabel('播放方式');label.setObjectName('SecondaryLabel');r.addWidget(label)
+        h.list_mode=QComboBox();h.list_mode.addItems(LIST_MODES);h.list_mode.setToolTip('只套用在這個清單；切換到別的清單可以設定不同的播放方式');h.list_mode.currentTextChanged.connect(h.set_list_mode);r.addWidget(h.list_mode,1)
         h.files=QListWidget();h.files.setObjectName('MediaList');h.files.setContextMenuPolicy(Qt.CustomContextMenu);h.files.customContextMenuRequested.connect(h.media_menu);h.files.itemDoubleClicked.connect(lambda _:h.play_selected());h.files.currentRowChanged.connect(h.selection);v.addWidget(h.files,1)
         r=row(v);button(r,'＋ 媒體',h.add_files,'PrimaryButton');button(r,'＋ 黑畫面',h.add_black);button(r,'移除',h.remove)
         r=row(v);button(r,'↑',lambda:h.move(-1));button(r,'↓',lambda:h.move(1));button(r,'套用到所選格子',lambda:h.compositor.use_selected_file())
@@ -112,11 +114,13 @@ class Interface:
         self.playback_widget,v=panel();self.playback_widget.setObjectName('PlaybackOutputPanel');self.playback_scroll.setWidget(self.playback_widget)
         heading=row(v);label=QLabel('播放及輸出');label.setObjectName('PanelHeading');heading.addWidget(label);heading.addStretch();button(heading,'收起',self.playback_menu.hide)
         form=QFormLayout();form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow);form.setRowWrapPolicy(QFormLayout.WrapLongRows);v.addLayout(form)
-        h.mode=QComboBox();h.mode.addItems(MODES);form.addRow('輪播模式',h.mode)
+        # Project-wide default for lists without their own mode (older projects); not shown.
+        h.mode=QComboBox(h);h.mode.addItems(MODES);h.mode.hide();h.mode.currentTextChanged.connect(h.sync_list_mode)
         h.effect=QComboBox();h.effect.addItems(EFFECTS);form.addRow('切換效果',h.effect)
         h.duration=QDoubleSpinBox();h.duration.setRange(.1,10);h.duration.setValue(1);h.duration.setSuffix(' 秒');form.addRow('轉場時間',h.duration)
         from PySide6.QtWidgets import QCheckBox
         h.pdf_auto=QCheckBox('PDF 每頁自動輪播（依素材秒數）');v.addWidget(h.pdf_auto)
+        h.output_gpu=QCheckBox('輸出使用 GPU 繪圖（4K／多畫面建議開啟）');h.output_gpu.toggled.connect(lambda on:h.set_output_gpu(on));v.addWidget(h.output_gpu)
         h.end_action=h.hold_last=EndAction();form.addRow('播放結束後',h.end_action)
         h.fit=QComboBox();h.fit.addItems(['完整顯示（保留黑邊）','填滿畫面（裁切）','強制滿版（拉伸至畫布）']);h.fit.currentIndexChanged.connect(h.refresh_media_fit);form.addRow('單畫面填滿',h.fit)
         h.output_fit=QComboBox();h.output_fit.addItems(['滿螢幕（等比例裁切）','完整畫布（保留黑邊）','延展至螢幕（可能變形）']);h.output_fit.currentIndexChanged.connect(h.refresh_output_fit);form.addRow('投影比例',h.output_fit)
@@ -143,6 +147,7 @@ class Interface:
         brand=QLabel('  MEDIA CAROUSEL  ');brand.setObjectName('BrandLabel');bar.addWidget(brand)
         action(bar,'素材',lambda:self.toggle_dock(self.asset_dock));action(bar,'CUE',lambda:self.toggle_dock(self.cue_dock));action(bar,'參數',lambda:self.toggle_dock(h.compositor))
         bar.addSeparator();action(bar,'畫布／4K',h.configure_canvas);action(bar,'輸出螢幕',h.choose_output);out=action(bar,'全螢幕輸出',h.output);out.setToolTip('F11 · 切換獨立輸出')
+        self.live_label=QLabel();self.live_label.setObjectName('LiveLabel');bar.addWidget(self.live_label);self.set_live(False)
         spacer=QWidget();spacer.setObjectName('ToolbarSpacer');spacer.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred);bar.addWidget(spacer)
         bar.addWidget(QLabel(' 風格 '));self.theme_combo=QComboBox();self.theme_combo.addItems(NAMES);self.theme_combo.setMinimumWidth(115);bar.addWidget(self.theme_combo)
         bar.addWidget(QLabel(' 配置 '));self.layout_combo=QComboBox();self.layout_combo.addItems(NAMES);self.layout_combo.setMinimumWidth(115);bar.addWidget(self.layout_combo)
@@ -156,6 +161,11 @@ class Interface:
         for d in self.docks:self.view_menu.addAction(d.toggleViewAction())
         self.view_menu.addSeparator();action(self.view_menu,'預覽視窗',h.show_preview)
         self.apply_theme(self.preferences.value('theme',0,type=int),save=False);self.apply_layout(self.preferences.value('layout',0,type=int),save=False)
+    def set_live(self,on):
+        if getattr(self,'_live',None)==on:return
+        self._live=on;self.live_label.setText(' ● LIVE 輸出中 ' if on else ' ○ 輸出待命 ')
+        self.live_label.setStyleSheet('QLabel{background:#d0343f;color:white;font-weight:600;border-radius:4px;padding:3px 8px;margin-left:6px;}' if on else 'QLabel{color:#8b98a5;padding:3px 8px;margin-left:6px;}')
+        self.live_label.setToolTip('輸出畫面已全螢幕；游標已隱藏，系統不會休眠' if on else '按 F11 或「全螢幕輸出」開始輸出')
     def toggle_dock(self,d):
         if d.isVisible() and not d.visibleRegion().isEmpty():d.hide()
         else:d.show();d.raise_()
@@ -192,6 +202,7 @@ class Interface:
         QSlider::sub-page:horizontal { background: %(accent)s; border-radius: 2px; }
         QSlider::handle:horizontal { background: %(accent)s; width: 13px; margin: -4px 0; border-radius: 6px; }
         QWidget#ChannelStrip { background: %(panel)s; border: 1px solid %(line)s; border-radius: 5px; }
+        QWidget#MasterStrip { background: %(panel)s; border: 1px solid %(accent)s; border-radius: 5px; }
         QLabel#FaderReadout { color: %(accent)s; font-family: Consolas, monospace; font-weight: 600; }
         QSlider#ChannelFader::groove:vertical { width: 8px; background: %(bg)s; border: 1px solid %(line)s; border-radius: 3px; }
         QSlider#ChannelFader::sub-page:vertical { background: %(raised)s; border-radius: 3px; }
