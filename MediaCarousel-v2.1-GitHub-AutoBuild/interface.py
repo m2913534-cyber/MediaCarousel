@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt,QSettings,QTimer,QSize
 from PySide6.QtGui import QAction,QActionGroup,QFont
 from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,
     QPushButton,QLabel,QComboBox,QDoubleSpinBox,QSlider,QListWidget,QListView,QDockWidget,
-    QToolBar,QToolButton,QMenu,QScrollArea,QSizePolicy,QAbstractItemView,QWidgetAction)
+    QToolBar,QToolButton,QMenu,QScrollArea,QSizePolicy,QAbstractItemView,QWidgetAction,QTabBar,QSplitter,QMessageBox)
 from model import MODES,EFFECTS,media_name,holds,LIST_MODES
 
 NAMES=['導播控台','明亮工作室','舞台演出','精簡工作台']
@@ -96,8 +96,10 @@ class Interface:
         self.asset_dock=self.dock('AssetDock','素材庫',w,Qt.LeftDockWidgetArea)
     def build_viewer(self):
         h=self.host;root=QWidget();root.setObjectName('ProgramPanel');h.setCentralWidget(root);v=QVBoxLayout(root);v.setContentsMargins(14,12,14,8);v.setSpacing(9)
-        r=row(v);self.program_label=QLabel('PROGRAM · 輸出預覽');self.program_label.setObjectName('PanelHeading');r.addWidget(self.program_label);r.addStretch();self.canvas_label=QLabel('1920 × 1080');self.canvas_label.setObjectName('SecondaryLabel');r.addWidget(self.canvas_label)
-        self.viewer_layout=v;v.addWidget(h.screen,1);h.screen.setMinimumSize(180,100)
+        r=row(v);self.program_label=QLabel('PROGRAM · 輸出預覽');self.program_label.setObjectName('PanelHeading');r.addWidget(self.program_label)
+        self.mode_tabs=QTabBar();self.mode_tabs.setObjectName('ModeTabs');self.mode_tabs.addTab('單畫面');self.mode_tabs.addTab('多畫面');self.mode_tabs.setDrawBase(False);self.mode_tabs.setToolTip('切換單畫面／多畫面輸出')
+        r.addSpacing(12);r.addWidget(self.mode_tabs);r.addStretch();self.canvas_label=QLabel('1920 × 1080');self.canvas_label.setObjectName('SecondaryLabel');r.addWidget(self.canvas_label)
+        self.viewer_layout=v;self.viewer_split=QSplitter(Qt.Horizontal);self.viewer_split.setChildrenCollapsible(False);self.viewer_split.addWidget(h.screen);v.addWidget(self.viewer_split,1);h.screen.setMinimumSize(180,100)
         r=row(v);self.source_label=QLabel('尚未播放');self.source_label.setObjectName('SecondaryLabel');r.addWidget(self.source_label,1);self.time_label=QLabel('00:00 / 00:00');self.time_label.setObjectName('TimeLabel');r.addWidget(self.time_label)
         h.seek=QSlider(Qt.Horizontal);h.seek.setRange(0,1000);h.seek.sliderReleased.connect(h.seek_to);v.addWidget(h.seek)
         r=row(v);button(r,'⏮',lambda:h.advance(True));h.play_btn=button(r,'▶ 播放／暫停',h.toggle,'PrimaryButton');button(r,'■ 停止',h.stop,'StopButton');button(r,'⏭',h.advance);r.addStretch()
@@ -145,7 +147,7 @@ class Interface:
         action(appearance,'恢復導播控台預設',lambda:self.reset())
         bar=QToolBar('主工具列',h);bar.setObjectName('MainToolbar');bar.setMovable(False);h.addToolBar(Qt.TopToolBarArea,bar)
         brand=QLabel('  MEDIA CAROUSEL  ');brand.setObjectName('BrandLabel');bar.addWidget(brand)
-        action(bar,'素材',lambda:self.toggle_dock(self.asset_dock));action(bar,'CUE',lambda:self.toggle_dock(self.cue_dock));action(bar,'參數',lambda:self.toggle_dock(h.compositor))
+        action(bar,'素材',lambda:self.toggle_dock(self.asset_dock));action(bar,'CUE',lambda:self.toggle_dock(self.cue_dock));action(bar,'多畫面',lambda:self.mode_tabs.setCurrentIndex(1))
         bar.addSeparator();action(bar,'畫布／4K',h.configure_canvas);action(bar,'輸出螢幕',h.choose_output);out=action(bar,'全螢幕輸出',h.output);out.setToolTip('F11 · 切換獨立輸出')
         self.live_label=QLabel();self.live_label.setObjectName('LiveLabel');bar.addWidget(self.live_label);self.set_live(False)
         spacer=QWidget();spacer.setObjectName('ToolbarSpacer');spacer.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred);bar.addWidget(spacer)
@@ -154,13 +156,26 @@ class Interface:
         self.theme_combo.currentIndexChanged.connect(self.apply_theme);self.layout_combo.currentIndexChanged.connect(self.apply_layout)
         h.setAcceptDrops(True)
     def finish(self,c):
-        h=self.host;self.docks.append(c);self.cue_panel=CuePanel(c);self.cue_dock=self.dock('CueDock','CUE · 場景',self.cue_panel,Qt.BottomDockWidgetArea)
+        h=self.host;self.cue_panel=CuePanel(c)
+        # Multi-screen controls live beside the preview on the 多畫面 tab, not in a side dock.
+        h.removeDockWidget(c);c.hide();self.multi_panel=c.tabs;self.multi_panel.setMinimumWidth(300);self.viewer_split.addWidget(self.multi_panel);self.viewer_split.setStretchFactor(0,1);self.viewer_split.setSizes([900,340])
+        self.mode_tabs.currentChanged.connect(self.choose_mode);c.enable.toggled.connect(self.sync_mode);self.sync_mode(c.enabled);self.cue_dock=self.dock('CueDock','CUE · 場景',self.cue_panel,Qt.BottomDockWidgetArea)
         from audio_meter import AudioMeter
         from audio_mixer import AudioPanel
         c.meter=AudioMeter(h);self.audio_panel=AudioPanel(h,c.meter);h.audio_mixer=self.audio_panel.mixer;self.audio_dock=self.dock('AudioDock','音訊監看／影片 FADER',self.audio_panel,Qt.RightDockWidgetArea)
         for d in self.docks:self.view_menu.addAction(d.toggleViewAction())
         self.view_menu.addSeparator();action(self.view_menu,'預覽視窗',h.show_preview)
         self.apply_theme(self.preferences.value('theme',0,type=int),save=False);self.apply_layout(self.preferences.value('layout',0,type=int),save=False)
+    def sync_mode(self,multi):
+        blocked=self.mode_tabs.blockSignals(True);self.mode_tabs.setCurrentIndex(1 if multi else 0);self.mode_tabs.blockSignals(blocked)
+        self.multi_panel.setVisible(bool(multi))
+    def choose_mode(self,index):
+        h=self.host;c=h.compositor;multi=index==1
+        if multi==c.enabled:return
+        on_air=getattr(self,'_live',False) and (h.running or any(l.running for l in c.layers))
+        if on_air and QMessageBox.question(h,'切換輸出模式','目前正在 LIVE 輸出，切換會停止正在播放的畫面。確定要切換到'+('多畫面' if multi else '單畫面')+'嗎？')!=QMessageBox.Yes:
+            self.sync_mode(c.enabled);return
+        c.enable.setChecked(multi)
     def set_live(self,on):
         if getattr(self,'_live',None)==on:return
         self._live=on;self.live_label.setText(' ● LIVE 輸出中 ' if on else ' ○ 輸出待命 ')
@@ -238,23 +253,23 @@ class Interface:
         h.setUpdatesEnabled(False)
         try:
             for d in self.docks:d.setFloating(False);h.removeDockWidget(d);d.setMinimumSize(180,100);d.setMaximumSize(16777215,16777215)
-            c.tabs.show();self.audio_panel.set_performance(index==2);self.cue_panel.set_performance(index==2)
+            self.audio_panel.set_performance(index==2);self.cue_panel.set_performance(index==2)
             h.setCorner(Qt.BottomLeftCorner,Qt.LeftDockWidgetArea if index in (0,1) else Qt.BottomDockWidgetArea)
             h.setCorner(Qt.BottomRightCorner,Qt.BottomDockWidgetArea)
             if index==0:
-                h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.addDockWidget(Qt.RightDockWidgetArea,audio);h.splitDockWidget(audio,c,Qt.Vertical);h.addDockWidget(Qt.BottomDockWidgetArea,cue)
-                h.resizeDocks([asset,audio],[360,320],Qt.Horizontal);h.resizeDocks([audio,c],[210,440],Qt.Vertical);h.resizeDocks([cue],[180],Qt.Vertical)
+                h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.addDockWidget(Qt.RightDockWidgetArea,audio);h.addDockWidget(Qt.BottomDockWidgetArea,cue)
+                h.resizeDocks([asset,audio],[360,320],Qt.Horizontal);h.resizeDocks([cue],[180],Qt.Vertical)
             elif index==1:
-                h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.splitDockWidget(asset,cue,Qt.Vertical);h.addDockWidget(Qt.BottomDockWidgetArea,audio);h.splitDockWidget(audio,c,Qt.Horizontal)
-                h.resizeDocks([asset],[360],Qt.Horizontal);h.resizeDocks([asset,cue],[430,280],Qt.Vertical);h.resizeDocks([audio,c],[290,700],Qt.Horizontal);h.resizeDocks([audio],[235],Qt.Vertical)
+                h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.splitDockWidget(asset,cue,Qt.Vertical);h.addDockWidget(Qt.BottomDockWidgetArea,audio)
+                h.resizeDocks([asset],[360],Qt.Horizontal);h.resizeDocks([asset,cue],[430,280],Qt.Vertical);h.resizeDocks([audio],[235],Qt.Vertical)
             elif index==2:
-                h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.addDockWidget(Qt.RightDockWidgetArea,c);h.addDockWidget(Qt.RightDockWidgetArea,audio);h.addDockWidget(Qt.BottomDockWidgetArea,cue)
+                h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.addDockWidget(Qt.RightDockWidgetArea,audio);h.addDockWidget(Qt.BottomDockWidgetArea,cue)
                 audio.setMinimumWidth(130);h.resizeDocks([audio],[140],Qt.Horizontal);h.resizeDocks([cue],[210],Qt.Vertical)
             else:
-                h.addDockWidget(Qt.RightDockWidgetArea,asset);h.splitDockWidget(asset,audio,Qt.Vertical);h.tabifyDockWidget(asset,cue);h.tabifyDockWidget(asset,c)
+                h.addDockWidget(Qt.RightDockWidgetArea,asset);h.splitDockWidget(asset,audio,Qt.Vertical);h.tabifyDockWidget(asset,cue)
                 h.resizeDocks([asset],[380],Qt.Horizontal);h.resizeDocks([asset,audio],[500,200],Qt.Vertical)
             for d in self.docks:d.show()
-            if index==2:asset.hide();c.hide()
+            if index==2:asset.hide()
             if index==3:asset.raise_()
         finally:h.setUpdatesEnabled(True)
         if hasattr(h,'screen'):h.screen.refit()
