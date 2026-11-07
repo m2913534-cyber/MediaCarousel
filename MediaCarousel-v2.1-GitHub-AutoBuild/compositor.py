@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTe
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name,is_pdf,is_powerpoint
+from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name,is_pdf,is_powerpoint,holds
 
 def clean_view(widget):
     return widget is not None and bool(widget.property('clean_output'))
@@ -265,7 +265,7 @@ class Layer(QGraphicsRectItem):
             return
         if d.kind=='image':
             self.elapsed+=dt
-            if self.elapsed>=d.config.get('seconds',5):self.advance()
+            if not holds(d.config) and self.elapsed>=d.config.get('seconds',5):self.advance()
         else:
             start,end=clip_bounds(d.config,d.player.duration());position=d.player.position()
             if d.player.mediaStatus()==QMediaPlayer.EndOfMedia or (end and position>=end):self.advance()

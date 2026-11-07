@@ -11,6 +11,9 @@ def is_pdf(item):return Path(item.get('path','')).suffix.lower() in PDF_EXT
 def is_powerpoint(item):return Path(item.get('path','')).suffix.lower() in PPT_EXT
 
 def is_still(item):return item.get('kind')=='black' or Path(item.get('path','')).suffix.lower() in IMAGE_EXT
+def holds(item):
+    """Stills marked hold stay on screen until the operator advances manually."""
+    return bool(item.get('hold')) and is_still(item)
 def media_name(item):return item.get('name','黑畫面') if item.get('kind')=='black' else Path(item.get('path','')).name
 
 def media_walk(value,fn):
@@ -80,6 +83,7 @@ def load_project(path):
         if not isinstance(item['path'],str):raise ValueError('媒體路徑錯誤')
         if item.get('kind')!='black':item['path']=str((Path(path).parent/item['path']).resolve())
         item['seconds']=number(item.get('seconds',5),5,.5,86400)
+        if 'hold' in item:item['hold']=bool(item['hold'])
         if any(key in item for key in ('single_x','single_y','single_zoom','single_scale_x','single_scale_y')):
             x,y,sx,sy=single_transform(item);item.update(single_x=x,single_y=y,single_scale_x=sx,single_scale_y=sy,single_zoom=number(item.get('single_zoom',sx),sx,.05,8))
         if is_pdf(item):item['pdf_page']=int(number(item.get('pdf_page',0),0,0,1000000))

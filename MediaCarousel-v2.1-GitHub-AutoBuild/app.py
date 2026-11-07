@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform
+from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform,holds
 
 class Screen(QGraphicsView):
     def __init__(self):
@@ -187,14 +187,14 @@ class Window(QMainWindow):
         self.files.clear()
         for item in self.lists[self.group_index()]['items']:
             path=Path(item['path']); image=is_still(item)
-            text=f"{'PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (f"  / {item['seconds']:g} 秒" if image else '')
+            text=f"{'PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (('  / 手動' if holds(item) else f"  / {item['seconds']:g} 秒") if image else '')
             if item.get('kind')!='black' and not path.is_file(): text='⚠ 遺失  '+text
             self.files.addItem(text)
     def selection(self,row):
-        items=self.lists[self.group_index()]['items']; self.seconds.blockSignals(True);self.clip_gain.blockSignals(True);self.clip_mute.blockSignals(True)
+        items=self.lists[self.group_index()]['items']; self.seconds.blockSignals(True);self.hold_still.blockSignals(True);self.clip_gain.blockSignals(True);self.clip_mute.blockSignals(True)
         if 0<=row<len(items):
-            c=items[row];self.seconds.setValue(c['seconds']);self.clip_start.setValue(c.get('start',0));self.clip_end.setValue(c.get('end',0));self.clip_gain.setValue(c.get('gain',100));self.clip_mute.setChecked(c.get('mute',False))
-        self.seconds.blockSignals(False);self.clip_gain.blockSignals(False);self.clip_mute.blockSignals(False)
+            c=items[row];self.seconds.setValue(c['seconds']);self.hold_still.setChecked(bool(c.get('hold')));self.hold_still.setEnabled(is_still(c));self.seconds.setEnabled(not holds(c));self.clip_start.setValue(c.get('start',0));self.clip_end.setValue(c.get('end',0));self.clip_gain.setValue(c.get('gain',100));self.clip_mute.setChecked(c.get('mute',False))
+        self.seconds.blockSignals(False);self.hold_still.blockSignals(False);self.clip_gain.blockSignals(False);self.clip_mute.blockSignals(False)
     def sync_selected_audio(self):
         row=self.files.currentRow();items=self.lists[self.group_index()]['items']
         if not 0<=row<len(items):return
@@ -269,9 +269,25 @@ class Window(QMainWindow):
     def set_seconds(self,value):
         row=self.files.currentRow(); items=self.lists[self.group_index()]['items']
         if 0<=row<len(items): items[row]['seconds']=value; self.render(); self.files.setCurrentRow(row)
+    def set_hold(self,checked):
+        row=self.files.currentRow(); items=self.lists[self.group_index()]['items']
+        if 0<=row<len(items) and is_still(items[row]):
+            items[row]['hold']=bool(checked);self.seconds.setEnabled(not checked)
+            # Players keep a copy of the item, so push the change to whatever is showing it now.
+            key=(self.group_index(),row)
+            if self.current==key and self.cue_item is None:
+                self.decks[self.active].config['hold']=bool(checked)
+                if not checked:self.elapsed=0
+            for layer in self.compositor.layers:
+                if getattr(layer,'current',None)==key and layer.c.get('kind','playlist')=='playlist' and 'items' not in layer.c and layer.c['group']==key[0]:
+                    layer.decks[layer.active].config['hold']=bool(checked)
+                    if not checked:layer.elapsed=0
+            self.render();self.files.setCurrentRow(row)
+            self.status.setText('此圖片會停留到按 ⏭ 或 → 才切換' if checked else f'此圖片恢復每 {items[row]["seconds"]:g} 秒自動切換')
     def apply_seconds(self):
         for item in self.lists[self.group_index()]['items']:
             if is_still(item) or is_pdf(item): item['seconds']=self.seconds.value()
+            if is_still(item): item['hold']=self.hold_still.isChecked()
         self.render()
     def new_list(self):
         name,ok=QInputDialog.getText(self,'新增清單','清單名稱')
@@ -496,8 +512,11 @@ class Window(QMainWindow):
                 if self.elapsed>=item['seconds']:self.elapsed=0;self.advance()
             return
         if d.kind=='image':
-            self.elapsed+=dt; fraction=self.elapsed/item['seconds']
-            if fraction>=1:self.advance()
+            self.elapsed+=dt
+            if holds(item):fraction=0
+            else:
+                fraction=self.elapsed/item['seconds']
+                if fraction>=1:self.advance()
         else:
             if d.player.mediaStatus()==QMediaPlayer.EndOfMedia:
                 self.advance();return

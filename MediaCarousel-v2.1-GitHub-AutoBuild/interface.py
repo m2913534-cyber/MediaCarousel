@@ -5,7 +5,7 @@ from PySide6.QtGui import QAction,QActionGroup,QFont
 from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,
     QPushButton,QLabel,QComboBox,QDoubleSpinBox,QSlider,QListWidget,QListView,QDockWidget,
     QToolBar,QToolButton,QMenu,QScrollArea,QSizePolicy,QAbstractItemView,QWidgetAction)
-from model import MODES,EFFECTS,media_name
+from model import MODES,EFFECTS,media_name,holds
 
 NAMES=['導播控台','明亮工作室','舞台演出','精簡工作台']
 PALETTES=[
@@ -83,11 +83,13 @@ class Interface:
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setMaximumHeight(310);scroll.setVisible(False);details,dv=panel();scroll.setWidget(details);v.addWidget(scroll)
         self.asset_detail_toggle.toggled.connect(scroll.setVisible)
         form=QFormLayout();dv.addLayout(form);h.seconds=QDoubleSpinBox();h.seconds.setRange(.5,86400);h.seconds.setValue(5);h.seconds.setSuffix(' 秒');h.seconds.valueChanged.connect(h.set_seconds);form.addRow('圖片／PDF／黑場',h.seconds)
+        from PySide6.QtWidgets import QCheckBox
+        h.hold_still=QCheckBox('停留不換（手動切換）');h.hold_still.setToolTip('勾選後這張圖片／黑場會一直顯示，直到按 ⏭ 或 → 才切換；單畫面與多畫面皆適用');h.hold_still.toggled.connect(h.set_hold);form.addRow('',h.hold_still)
         h.clip_start=QDoubleSpinBox();h.clip_end=QDoubleSpinBox()
         for label,spin in [('開始秒',h.clip_start),('結束秒 · 0＝片尾',h.clip_end)]:spin.setRange(0,86400);spin.setDecimals(2);form.addRow(label,spin)
         h.clip_gain=QDoubleSpinBox();h.clip_gain.setRange(0,100);h.clip_gain.setValue(100);h.clip_gain.setSuffix(' %');form.addRow('素材音量',h.clip_gain)
         from PySide6.QtWidgets import QCheckBox
-        h.clip_mute=QCheckBox('素材靜音');dv.addWidget(h.clip_mute);button(dv,'套用片段與音量',h.edit_clip);button(dv,'套用圖片／PDF 秒數到本清單',h.apply_seconds)
+        h.clip_mute=QCheckBox('素材靜音');dv.addWidget(h.clip_mute);button(dv,'套用片段與音量',h.edit_clip);button(dv,'套用秒數與停留設定到本清單',h.apply_seconds)
         tip=QLabel('影片可按右鍵開啟獨立編輯視窗。');tip.setWordWrap(True);tip.setObjectName('SecondaryLabel');dv.addWidget(tip)
         self.asset_dock=self.dock('AssetDock','素材庫',w,Qt.LeftDockWidgetArea)
     def build_viewer(self):
@@ -266,5 +268,5 @@ class Interface:
             current=d.player.position() if d.kind=='video' else int((l.elapsed if h.compositor.enabled and l else h.elapsed)*1000)
             total=d.player.duration() if d.kind=='video' else int(d.config.get('seconds',5)*1000)
             fmt=lambda ms:f'{max(0,int(ms))//60000:02d}:{max(0,int(ms))//1000%60:02d}'
-            self.time_label.setText(fmt(current)+' / '+fmt(total))
+            self.time_label.setText(fmt(current)+' / '+('手動' if holds(d.config) else fmt(total)))
         else:self.time_label.setText('00:00 / 00:00')
