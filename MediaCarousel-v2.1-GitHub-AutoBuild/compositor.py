@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QGraphicsRectItem,QGraphicsItem,QGraphicsSimpleTe
 from PySide6.QtMultimedia import (QMediaPlayer,QAudioOutput,QMediaCaptureSession,
     QCamera,QMediaDevices,QScreenCapture,QWindowCapture)
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name,is_pdf,is_powerpoint,holds
+from model import IMAGE_EXT,EFFECTS,following,clip_bounds,normalize_layer,MAX_LAYERS,is_still,media_name,is_pdf,is_powerpoint,holds,is_virtual,is_lan
 
 def clean_view(widget):
     return widget is not None and bool(widget.property('clean_output'))
@@ -75,9 +75,11 @@ class MediaDeck:
         if self.preroll.observe(f):self.ready=True;self.last_frame=f
     def load(self,c,warm=False):
         self.clear();self.preroll.warming=warm;self.config=deepcopy(c);p=c['path']
-        if c.get('kind')!='black' and not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
+        if not is_virtual(c) and not Path(p).is_file():raise ValueError('媒體遺失：'+Path(p).name)
         if is_pdf(c):
             self.kind='pdf';self.item=self.image;self.pdf_source.load(p,c.get('pdf_page',0),QSizeF(self.layer.c['w'],self.layer.c['h']).toSize())
+        elif is_lan(c):
+            import lan_receiver;self.kind='image';self.item=self.image;lan_receiver.show_frame(self,getattr(self.layer.panel.host,'lan_hub',None),initial=True);self.ready=True
         elif c.get('kind')=='black':
             self.kind='image';self.item=self.image;pix=QPixmap(2,2);pix.fill(Qt.black);self.image.setPixmap(pix);self.ready=True
         elif Path(p).suffix.lower() in IMAGE_EXT:
@@ -493,7 +495,7 @@ class Compositor(QDockWidget):
         # Check every stored source before interrupting the current show.
         from model import media_walk
         missing=[]
-        media_walk(s['layout'] if multi else s.get('single'),lambda item:missing.append(media_name(item)) if item.get('kind')!='black' and not Path(item['path']).is_file() else None)
+        media_walk(s['layout'] if multi else s.get('single'),lambda item:missing.append(media_name(item)) if not is_virtual(item) and not Path(item['path']).is_file() else None)
         if missing:self.host.status.setText('CUE 媒體遺失，保留目前畫面：'+', '.join(missing));return
         self.host.stop();self.host.apply_settings(settings);self.enable.setChecked(multi);self.restore(s['layout'])
         if multi:

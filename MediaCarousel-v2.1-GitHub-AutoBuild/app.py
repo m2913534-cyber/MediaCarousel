@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
     QFileDialog,QInputDialog,QMessageBox,QGraphicsScene,QGraphicsView,QGraphicsPixmapItem,QSplitter,QCheckBox,QGraphicsRectItem,QGraphicsItem)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaFormat
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform,holds,list_mode,MODE_TO_LIST
+from model import following, save_project, load_project, MODES, EFFECTS, IMAGE_EXT, clip_bounds, is_still, media_name,is_pdf,is_powerpoint,single_transform,holds,list_mode,MODE_TO_LIST,is_virtual,is_lan
 
 class Screen(QGraphicsView):
     def __init__(self):
@@ -85,6 +85,8 @@ class Deck:
         self.clear();self.preroll.warming=warm; self.path=path;self.source_ref=config; self.config=dict(config or {}); self.clip_loaded=False
         if is_pdf(self.config):
             self.kind='pdf';self.item=self.image;self.fit_mode=int(fit);self.pdf_source.load(path,self.config.get('pdf_page',0),self.screen.sceneRect().size().toSize())
+        elif is_lan(self.config):
+            import lan_receiver;self.kind='image';self.item=self.image;lan_receiver.show_frame(self,getattr(getattr(self,'lan_host',None),'lan_hub',None),initial=True)
         elif self.config.get('kind')=='black':
             self.kind='image';self.item=self.image;pix=QPixmap(2,2);pix.fill(Qt.black);self.image.setPixmap(pix)
         elif Path(path).suffix.lower() in IMAGE_EXT:
@@ -125,6 +127,9 @@ class Window(QMainWindow):
         self.cue_item=None;self.lists=[{'name':'播放清單 1','items':[]}]; self.current=None; self.active=0
         self.held=False;self.running=False; self.pending=None; self.transition=None; self.elapsed=0; self.failed=set()
         self.screen=Screen(); self.screen.exit_callback=self.stop; self.decks=[Deck(self.screen),Deck(self.screen)]
+        from lan_receiver import LanHub
+        self.lan_hub=LanHub(self)
+        for d in self.decks:d.lan_host=self
         for i,d in enumerate(self.decks):
             d.pdf_source.ready.connect(lambda image,page,total,i=i:self.document_ready(i,page,total))
             d.pdf_source.failed.connect(lambda message,i=i:self.media_error(i,message))
@@ -143,6 +148,7 @@ class Window(QMainWindow):
         self.keep_awake=KeepAwake();set_gpu(self.output_view,gpu_enabled());self.output_view.state_callback=self.refresh_live_state
         self.output_gpu.blockSignals(True);self.output_gpu.setChecked(gpu_enabled());self.output_gpu.blockSignals(False)
         self.live_timer=QTimer(self);self.live_timer.timeout.connect(self.refresh_live_state);self.live_timer.start(1000)
+        self.lan_timer=QTimer(self);self.lan_timer.timeout.connect(self.refresh_lan);self.lan_timer.start(15)
         self.preview_view=Screen();self.preview_view.viewport().setProperty('clean_output',True);self.preview_view.setInteractive(False);self.preview_view.setScene(self.screen.scene());self.preview_view.setWindowTitle('即時預覽 — Media Carousel');self.preview_view.resize(800,450);self.preview_view.hide()
         from presentations import PresentationController
         self.presentations=PresentationController(self)
@@ -200,8 +206,8 @@ class Window(QMainWindow):
         self.sync_list_mode();self.files.clear()
         for item in self.lists[self.group_index()]['items']:
             path=Path(item['path']); image=is_still(item)
-            text=f"{'PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '圖片' if image else '影片'}  {media_name(item)}"+ (('  / 手動' if holds(item) else f"  / {item['seconds']:g} 秒") if image else '')
-            if item.get('kind')!='black' and not path.is_file(): text='⚠ 遺失  '+text
+            text=f"{'PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '內網畫面' if is_lan(item) else '圖片' if image else '影片'}  {media_name(item)}"+ (('  / 手動' if holds(item) else f"  / {item['seconds']:g} 秒") if image else '')
+            if not is_virtual(item) and not path.is_file(): text='⚠ 遺失  '+text
             self.files.addItem(text)
     def selection(self,row):
         items=self.lists[self.group_index()]['items']; self.seconds.blockSignals(True);self.hold_still.blockSignals(True);self.clip_gain.blockSignals(True);self.clip_mute.blockSignals(True)
@@ -424,7 +430,7 @@ class Window(QMainWindow):
         self.pending={'index':idx,'started':time.monotonic()}; self.elapsed=0;self.single_editor.sync()
         self.wake()
         try:
-            if item.get('kind')!='black' and not Path(item['path']).is_file():raise ValueError('找不到檔案')
+            if not is_virtual(item) and not Path(item['path']).is_file():raise ValueError('找不到檔案')
             d=self.decks[idx]
             if prepared is d:
                 d.config=dict(item);d.source_ref=item;d.relayout(self.fit.currentIndex());d.item.setOpacity(0);d.item.show();d.preroll.activate()
@@ -587,6 +593,23 @@ class Window(QMainWindow):
         QTimer.singleShot(0,view.refit)
     def place_output(self,screen):
         view=self.output_view;view.showNormal();view.winId();view.windowHandle().setScreen(screen);view.setGeometry(screen.geometry())
+    def refresh_lan(self):
+        """Show the newest LAN frame on every deck currently holding a LAN source."""
+        import lan_receiver
+        hub=self.lan_hub
+        for d in self.decks:
+            if is_lan(d.config) and lan_receiver.show_frame(d,hub):
+                size=d.image.pixmap().size()
+                if size!=getattr(d,'lan_size',None):d.lan_size=size;d.relayout(self.fit.currentIndex())
+        for layer in self.compositor.layers:
+            for d in getattr(layer,'decks',()):
+                if is_lan(d.config) and lan_receiver.show_frame(d,hub):
+                    size=d.image.pixmap().size()
+                    if size!=getattr(d,'lan_size',None):d.lan_size=size;d.layout()
+    def add_lan(self,key,name):
+        self.lists[self.group_index()]['items'].append({'kind':'lan','path':'lan:'+key,'lan_key':key,'name':'內網：'+name,'seconds':5,'start':0,'end':0,'gain':0,'mute':True})
+        self.render();self.files.setCurrentRow(self.files.count()-1);self.persist_session()
+        self.status.setText(f'已把「{name}」加入清單；雙擊或按播放即可投影')
     def master_level(self):return 0 if getattr(self,'master_mute',False) else self.volume.value()/100
     def set_master_mute(self,on):
         self.master_mute=bool(on);self.refresh_live_audio();self.status.setText('全部靜音' if on else '已解除全部靜音')
@@ -660,7 +683,7 @@ class Window(QMainWindow):
         if hasattr(self,'presentations') and not self.presentations.shutdown():
             self.status.setText('PowerPoint 正在結束放映，請稍候再關閉。');e.ignore();return
         for editor in list(getattr(self,'video_editors',{}).values()):editor.close()
-        self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();self.keep_awake.close();super().closeEvent(e)
+        self.persist_session();self.screen.scene().selectionChanged.disconnect(self.compositor.scene_selection);self.stop();self.screen.exit_callback=None;self.screen.close();self.output_view.close();self.preview_view.close();self.keep_awake.close();self.lan_hub.stop();super().closeEvent(e)
 
 if __name__=='__main__':
     app=QApplication(sys.argv);app.setApplicationName('Media Carousel');window=Window();window.show()

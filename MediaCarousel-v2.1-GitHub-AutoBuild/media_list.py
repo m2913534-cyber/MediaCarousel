@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt,QObject,QTimer,QSize,QRectF,QUrl,Signal
 from PySide6.QtGui import QPixmap,QImage,QImageReader,QPainter,QColor,QFont,QPen
 from PySide6.QtWidgets import QStyledItemDelegate,QStyle
-from model import is_pdf,is_powerpoint,is_still,holds,media_name,clip_bounds
+from model import is_pdf,is_powerpoint,is_still,holds,media_name,clip_bounds,is_virtual,is_lan
 
 THUMB=QSize(192,108)  # drawn at 96×54, stored at 2× for Retina
 ROW_HEIGHT=66
@@ -32,6 +32,7 @@ class ThumbnailCache(QObject):
         return (path,stamp)
     def get(self,item):
         if item.get('kind')=='black':return self.static('black',lambda:label_pixmap('',  '#000000'))
+        if is_lan(item):return self.static('lan',lambda:label_pixmap('LAN','#1f6f63'))
         if is_powerpoint(item):return self.static('ppt',lambda:label_pixmap('PPT','#c4512f'))
         key=self.key(item)
         if key in self.pixmaps:return self.pixmaps[key]
@@ -107,7 +108,7 @@ class MediaDelegate(QStyledItemDelegate):
         pix=h.thumbnails.get(item)
         if pix is not None and not pix.isNull():
             size=pix.size().scaled(thumb.size().toSize(),Qt.KeepAspectRatio);target=QRectF(0,0,size.width(),size.height());target.moveCenter(thumb.center());p.drawPixmap(target,pix,QRectF(pix.rect()))
-        missing=item.get('kind')!='black' and not Path(item.get('path','')).is_file()
+        missing=not is_virtual(item) and not Path(item.get('path','')).is_file()
         text_x=thumb.right()+10;width=max(10,r.right()-text_x-8)
         font=QFont(option.font);font.setBold(True);p.setFont(font);p.setPen(QColor(c['text']))
         name=('▶ ' if progress is not None else '')+media_name(item)
@@ -121,6 +122,7 @@ class MediaDelegate(QStyledItemDelegate):
         p.drawText(QRectF(text_x,r.y()+33,width,20),Qt.AlignLeft|Qt.AlignVCenter,p.fontMetrics().elidedText(self.subtitle(item,missing),Qt.ElideRight,int(width)))
         p.restore()
     def subtitle(self,item,missing):
+        if is_lan(item):return self.lan_subtitle(item)
         kind='PDF' if is_pdf(item) else 'PowerPoint' if is_powerpoint(item) else '黑畫面' if item.get('kind')=='black' else '圖片' if is_still(item) else '影片'
         if missing:return '⚠ 檔案遺失 · '+kind
         if holds(item):return kind+' · 手動切換'
@@ -131,6 +133,16 @@ class MediaDelegate(QStyledItemDelegate):
             if length:
                 span=max(0,(end or length)-start);return f'{kind} · {int(span)//60:02d}:{int(span)%60:02d}'+(' · 片段' if start or item.get('end') else '')
         return kind
+
+    def lan_subtitle(self,item):
+        import lan_receiver
+        hub=getattr(self.host,'lan_hub',None)
+        if not hub or not hub.running:return '內網畫面 · 接收未啟動'
+        key=lan_receiver.item_key(item);info=next((s for s in hub.senders() if s['key']==key),None)
+        if not info:return '內網畫面 · 等待來源連線'
+        if info['transport']!='tcp':return '內網畫面 · 請在 Sender 改選 TCP 相容'
+        if not info['live']:return '內網畫面 · 已連線，等待畫面'
+        return f"內網畫面 · {info['fps']:.0f} FPS · {info['width']}×{info['height']}"
 
 def attach(host):
     """Install thumbnails and progress rows on the host's media list."""

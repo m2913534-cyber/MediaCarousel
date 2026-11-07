@@ -149,6 +149,7 @@ class Interface:
         brand=QLabel('  MEDIA CAROUSEL  ');brand.setObjectName('BrandLabel');bar.addWidget(brand)
         action(bar,'素材',lambda:self.toggle_dock(self.asset_dock));action(bar,'CUE',lambda:self.toggle_dock(self.cue_dock));action(bar,'多畫面',lambda:self.mode_tabs.setCurrentIndex(1))
         bar.addSeparator();action(bar,'畫布／4K',h.configure_canvas);action(bar,'輸出螢幕',h.choose_output);out=action(bar,'全螢幕輸出',h.output);out.setToolTip('F11 · 切換獨立輸出')
+        lan=action(bar,'內網投影',lambda:__import__('lan_panel').open_panel(h));lan.setToolTip('接收 LEDSpace Sender 從其他電腦投影的畫面')
         self.live_label=QLabel();self.live_label.setObjectName('LiveLabel');bar.addWidget(self.live_label);self.set_live(False)
         spacer=QWidget();spacer.setObjectName('ToolbarSpacer');spacer.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred);bar.addWidget(spacer)
         bar.addWidget(QLabel(' 風格 '));self.theme_combo=QComboBox();self.theme_combo.addItems(NAMES);self.theme_combo.setMinimumWidth(115);bar.addWidget(self.theme_combo)

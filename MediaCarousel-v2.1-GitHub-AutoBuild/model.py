@@ -17,11 +17,16 @@ PPT_EXT={'.ppt','.pptx','.pps','.ppsx'}
 def is_pdf(item):return Path(item.get('path','')).suffix.lower() in PDF_EXT
 def is_powerpoint(item):return Path(item.get('path','')).suffix.lower() in PPT_EXT
 
-def is_still(item):return item.get('kind')=='black' or Path(item.get('path','')).suffix.lower() in IMAGE_EXT
+def is_virtual(item):return item.get('kind') in ('black','lan')
+def is_lan(item):return item.get('kind')=='lan'
+def is_still(item):return is_virtual(item) or Path(item.get('path','')).suffix.lower() in IMAGE_EXT
 def holds(item):
-    """Stills marked hold stay on screen until the operator advances manually."""
-    return bool(item.get('hold')) and is_still(item)
-def media_name(item):return item.get('name','黑畫面') if item.get('kind')=='black' else Path(item.get('path','')).name
+    """Stills marked hold, and live LAN sources, stay on screen until the operator advances manually."""
+    return (bool(item.get('hold')) or is_lan(item)) and is_still(item)
+def media_name(item):
+    if item.get('kind')=='black':return item.get('name','黑畫面')
+    if is_lan(item):return item.get('name','內網畫面')
+    return Path(item.get('path','')).name
 
 def media_walk(value,fn):
     if isinstance(value,dict):
@@ -73,7 +78,7 @@ def save_project(path, lists, settings, scenes=None, layout=None):
     base=Path(path).parent
     data=deepcopy({'version':2,'lists':lists,'settings':settings,'scenes':scenes or [],'layout':layout or []})
     def relative(item):
-        if item.get('kind')=='black':return
+        if is_virtual(item):return
         # Compare real paths: loading resolves symlinks (e.g. /var → /private/var), so saving must too.
         try:item['path']=os.path.relpath(os.path.realpath(item['path']),os.path.realpath(base))
         except ValueError:pass
@@ -90,7 +95,7 @@ def load_project(path):
             if not isinstance(item.get('path'),str):raise ValueError('媒體路徑錯誤')
     def absolute(item):
         if not isinstance(item['path'],str):raise ValueError('媒體路徑錯誤')
-        if item.get('kind')!='black':item['path']=str((Path(path).parent/item['path']).resolve())
+        if not is_virtual(item):item['path']=str((Path(path).parent/item['path']).resolve())
         item['seconds']=number(item.get('seconds',5),5,.5,86400)
         if 'hold' in item:item['hold']=bool(item['hold'])
         if any(key in item for key in ('single_x','single_y','single_zoom','single_scale_x','single_scale_y')):
