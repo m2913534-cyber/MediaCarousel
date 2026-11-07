@@ -137,6 +137,7 @@ class Window(QMainWindow):
         self.compositor=Compositor(self);self.interface.finish(self.compositor)
         from single_editor import SingleEditor
         self.single_editor=SingleEditor(self)
+        import media_list;media_list.attach(self)
         self.output_view=Screen();self.output_view.viewport().setProperty('clean_output',True);self.output_view.setInteractive(False);self.output_view.setScene(self.screen.scene());self.output_view.hide();self.refresh_output_fit()
         from output_support import KeepAwake,set_gpu,gpu_enabled
         self.keep_awake=KeepAwake();set_gpu(self.output_view,gpu_enabled());self.output_view.state_callback=self.refresh_live_state
@@ -278,6 +279,8 @@ class Window(QMainWindow):
         if end and end<=start:QMessageBox.warning(self,'片段錯誤','結束秒數必須大於開始秒數');return
         items[row].update(start=start,end=end,gain=self.clip_gain.value(),mute=self.clip_mute.isChecked())
         self.live_selected_audio(gain=self.clip_gain.value(),mute=self.clip_mute.isChecked());self.status.setText('音量與靜音即時生效；片段起訖在下次播放時套用。')
+    def row_progress(self,group,row):
+        import media_list;return media_list.row_progress(self,group,row)
     def effective_mode(self,group=None):
         if group is None:group=self.current[0] if self.current is not None else self.group_index()
         return list_mode(self.lists[group],self.mode.currentText()) if 0<=group<len(self.lists) else self.mode.currentText()

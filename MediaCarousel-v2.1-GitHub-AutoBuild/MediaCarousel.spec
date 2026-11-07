@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 root=Path(SPECPATH)
 platform_imports=['pythoncom','pywintypes','win32com.client'] if sys.platform=='win32' else []
-a=Analysis([str(root/'app.py')],pathex=[str(root)],binaries=[],datas=[(str(root/'assets'),'assets')],hiddenimports=['powerpoint_mac','output_support','PySide6.QtOpenGLWidgets','PySide6.QtOpenGL','playback_cache','smoke_media','compositor','model','interface','audio_meter','audio_mixer','single_editor','video_editor','pdf_source','presentations','powerpoint','PySide6.QtPdf']+platform_imports,hookspath=[],hooksconfig={},runtime_hooks=[],excludes=['PySide6.QtWebEngineCore','PySide6.QtWebEngineWidgets','PySide6.QtWebEngineQuick'],noarchive=False)
+a=Analysis([str(root/'app.py')],pathex=[str(root)],binaries=[],datas=[(str(root/'assets'),'assets')],hiddenimports=['powerpoint_mac','output_support','media_list','PySide6.QtOpenGLWidgets','PySide6.QtOpenGL','playback_cache','smoke_media','compositor','model','interface','audio_meter','audio_mixer','single_editor','video_editor','pdf_source','presentations','powerpoint','PySide6.QtPdf']+platform_imports,hookspath=[],hooksconfig={},runtime_hooks=[],excludes=['PySide6.QtWebEngineCore','PySide6.QtWebEngineWidgets','PySide6.QtWebEngineQuick'],noarchive=False)
 pyz=PYZ(a.pure)
 exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name='MediaCarousel',debug=False,bootloader_ignore_signals=False,strip=False,upx=False,console=False,disable_windowed_traceback=False,target_arch=None,codesign_identity=None,entitlements_file=None)
 coll=COLLECT(exe,a.binaries,a.datas,strip=False,upx=False,name='MediaCarousel')

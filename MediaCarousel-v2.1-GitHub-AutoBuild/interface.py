@@ -243,16 +243,16 @@ class Interface:
             h.setCorner(Qt.BottomRightCorner,Qt.BottomDockWidgetArea)
             if index==0:
                 h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.addDockWidget(Qt.RightDockWidgetArea,audio);h.splitDockWidget(audio,c,Qt.Vertical);h.addDockWidget(Qt.BottomDockWidgetArea,cue)
-                h.resizeDocks([asset,audio],[270,320],Qt.Horizontal);h.resizeDocks([audio,c],[210,440],Qt.Vertical);h.resizeDocks([cue],[180],Qt.Vertical)
+                h.resizeDocks([asset,audio],[360,320],Qt.Horizontal);h.resizeDocks([audio,c],[210,440],Qt.Vertical);h.resizeDocks([cue],[180],Qt.Vertical)
             elif index==1:
                 h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.splitDockWidget(asset,cue,Qt.Vertical);h.addDockWidget(Qt.BottomDockWidgetArea,audio);h.splitDockWidget(audio,c,Qt.Horizontal)
-                h.resizeDocks([asset],[285],Qt.Horizontal);h.resizeDocks([asset,cue],[430,280],Qt.Vertical);h.resizeDocks([audio,c],[290,700],Qt.Horizontal);h.resizeDocks([audio],[235],Qt.Vertical)
+                h.resizeDocks([asset],[360],Qt.Horizontal);h.resizeDocks([asset,cue],[430,280],Qt.Vertical);h.resizeDocks([audio,c],[290,700],Qt.Horizontal);h.resizeDocks([audio],[235],Qt.Vertical)
             elif index==2:
                 h.addDockWidget(Qt.LeftDockWidgetArea,asset);h.addDockWidget(Qt.RightDockWidgetArea,c);h.addDockWidget(Qt.RightDockWidgetArea,audio);h.addDockWidget(Qt.BottomDockWidgetArea,cue)
                 audio.setMinimumWidth(130);h.resizeDocks([audio],[140],Qt.Horizontal);h.resizeDocks([cue],[210],Qt.Vertical)
             else:
                 h.addDockWidget(Qt.RightDockWidgetArea,asset);h.splitDockWidget(asset,audio,Qt.Vertical);h.tabifyDockWidget(asset,cue);h.tabifyDockWidget(asset,c)
-                h.resizeDocks([asset],[340],Qt.Horizontal);h.resizeDocks([asset,audio],[500,200],Qt.Vertical)
+                h.resizeDocks([asset],[380],Qt.Horizontal);h.resizeDocks([asset,audio],[500,200],Qt.Vertical)
             for d in self.docks:d.show()
             if index==2:asset.hide();c.hide()
             if index==3:asset.raise_()
