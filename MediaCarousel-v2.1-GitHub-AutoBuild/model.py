@@ -74,7 +74,8 @@ def save_project(path, lists, settings, scenes=None, layout=None):
     data=deepcopy({'version':2,'lists':lists,'settings':settings,'scenes':scenes or [],'layout':layout or []})
     def relative(item):
         if item.get('kind')=='black':return
-        try:item['path']=os.path.relpath(item['path'],base)
+        # Compare real paths: loading resolves symlinks (e.g. /var → /private/var), so saving must too.
+        try:item['path']=os.path.relpath(os.path.realpath(item['path']),os.path.realpath(base))
         except ValueError:pass
     media_walk(data,relative)
     tmp=Path(str(path)+'.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8');tmp.replace(path)
